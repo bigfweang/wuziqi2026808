@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 const port = "3467";
 const origin = `http://127.0.0.1:${port}`;
@@ -20,7 +21,13 @@ server.stderr.on("data", (chunk) => { logs += chunk.toString(); });
 
 async function request(path, init) {
   const response = await fetch(`${origin}${path}`, init);
-  const data = await response.json();
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`${response.status}: API did not return JSON (${JSON.stringify(text)})\n${logs}`);
+  }
   if (!response.ok) throw new Error(`${response.status}: ${JSON.stringify(data)}`);
   return data;
 }
@@ -35,6 +42,24 @@ async function waitUntilReady() {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   throw new Error(`server did not become ready\n${logs}`);
+}
+
+async function stopServer() {
+  if (server.exitCode === null) {
+    server.kill("SIGTERM");
+    await Promise.race([
+      new Promise((resolve) => server.once("exit", resolve)),
+      delay(3000),
+    ]);
+  }
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      rmSync(dataDirectory, { recursive: true, force: true });
+      return;
+    } catch {
+      await delay(150 * (attempt + 1));
+    }
+  }
 }
 
 try {
@@ -79,6 +104,5 @@ try {
   assert.equal(blackView.room.whiteName, "白方");
   process.stdout.write("smoke test passed: page, create, join, moves, undo, resign, reset, persistence\n");
 } finally {
-  server.kill("SIGTERM");
-  rmSync(dataDirectory, { recursive: true, force: true });
+  await stopServer();
 }

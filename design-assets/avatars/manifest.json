@@ -1,0 +1,30 @@
+{
+  "source": "avatar-sheet-source.png",
+  "sourceSha256": "3bb8d3c23d74163c3db79eddf83783c66dcd3a475627f59eee1d7102d63fb489",
+  "sourceSize": [1254, 1254],
+  "frameRemoved": true,
+  "interiorColumns": [[55, 414], [450, 804], [840, 1199]],
+  "interiorRows": [[55, 414], [450, 803], [839, 1193]],
+  "normalization": {
+    "canvasSize": [359, 359],
+    "background": "#ffffff",
+    "outputSize": [256, 256],
+    "resampling": "nearest",
+    "clearedOuterPixels": 8
+  },
+  "order": [
+    "01-face-short-hair.png",
+    "02-face-bob.png",
+    "03-face-curly.png",
+    "04-face-glasses.png",
+    "05-face-bangs.png",
+    "06-face-spiky.png",
+    "07-face-beard.png",
+    "08-face-bun.png",
+    "09-face-mustache.png"
+  ],
+  "runtimeCopies": [
+    "public/avatars",
+    "minigame/images/avatars"
+  ]
+}

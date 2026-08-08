@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>像素五子棋｜小游戏开发预览</title>
+  <style>
+    *{box-sizing:border-box}html,body{min-height:100%;margin:0}body{display:grid;place-items:center;background:#b8c9a9;font-family:system-ui,"PingFang SC",sans-serif}.stage{position:relative;width:min(390px,100vw);height:min(844px,100vh);overflow:hidden;background:#f8f5e9;box-shadow:0 24px 80px #25382a55}.stage canvas{display:block;width:100%;height:100%;touch-action:manipulation}.notice{position:fixed;z-index:5;left:12px;top:12px;max-width:calc(100vw - 24px);padding:6px 10px;color:#f8f5e9;background:#214b3ae8;border:1px solid #dce9d2;font-size:11px;white-space:nowrap;pointer-events:none}@media(max-width:700px){.notice{left:50%;top:auto;bottom:5px;transform:translateX(-50%);font-size:9px}.stage{width:100vw;height:100vh}}
+  </style>
+</head>
+<body>
+  <div id="dev-notice" class="notice">无 AppID 开发预览｜后端使用本机 API</div>
+  <main class="stage"><canvas id="game-canvas" aria-label="像素五子棋小游戏开发预览"></canvas></main>
+  <script src="./mock-wx.js"></script>
+  <script src="./bundle.js"></script>
+</body>
+</html>

@@ -9,6 +9,25 @@
 - 悔一步、提示、认输、再来一局
 - SQLite 本地持久化，重启服务器不会丢失房间数据
 
+## 微信小游戏开发版（无需 AppID）
+
+仓库现在同时包含 `minigame/` 原生 Canvas 小游戏客户端。账号未准备好时，可以先运行完整开发预览：
+
+```bash
+npm ci
+npm run dev
+```
+
+打开：
+
+```text
+http://127.0.0.1:3000/minigame-preview/index.html
+```
+
+开发版已经具备稳定随机头像、模拟微信昵称、用户统计、日期历史、双方在线状态、分享房间参数和退出续局。浏览器预览连接真实 SQLite API，不是静态视觉稿；无痕窗口可模拟第二位用户。
+
+微信小游戏源码、导入方式和账号接入清单见 [`minigame/README.md`](minigame/README.md)。正式 AppID、`wx.login`、真机分享和 HTTPS 合法域名在账号提供后接入；AppSecret 不进入客户端或 Git。
+
 ## 最快部署：Docker
 
 服务器需要安装 Docker 与 Docker Compose。解压后进入项目目录：
@@ -73,7 +92,7 @@ server {
 }
 ```
 
-微信内分享建议使用 HTTPS 域名。当前工程是能在微信内置浏览器打开的网页应用，不是需要微信 AppID 与审核的原生小程序。
+微信内分享建议使用 HTTPS 域名。根页面仍是网页版本；`minigame/` 是新增的原生微信小游戏客户端。
 
 ## 不使用 Docker
 

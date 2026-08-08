@@ -6,13 +6,18 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "predev": "npm run build:minigame-preview",
     "dev": "next dev",
+    "prebuild": "npm run build:minigame-preview",
     "build": "next build",
+    "build:minigame-preview": "node scripts/build-minigame-preview.mjs",
     "start": "next start",
+    "test:minigame": "node --test minigame/test/*.test.js",
+    "test:profile": "node scripts/profile-flow-test.mjs",
     "test:smoke": "node scripts/smoke-test.mjs"
   },
   "dependencies": {
-    "next": "16.2.6",
+    "next": "16.3.0",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
@@ -21,6 +26,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "esbuild": "^0.28.1",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3"
   }

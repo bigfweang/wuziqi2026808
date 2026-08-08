@@ -1,0 +1,13 @@
+{
+  "appid": "wx40ffba5f064aeb0b",
+  "compileType": "game",
+  "projectname": "pixel-gomoku-dev",
+  "description": "像素五子棋微信小游戏开发版",
+  "setting": {
+    "es6": true,
+    "minified": false,
+    "urlCheck": false,
+    "postcss": false,
+    "compileHotReLoad": true
+  }
+}
