@@ -30,7 +30,7 @@ test("newer room revisions win and stale polling cannot roll state back", () => 
 test("finished board without winner is shown as a draw", () => {
   assert.equal(roomStatusText({ status: "finished", winner: 0, turn: 2 }), "和棋，棋盘下满啦");
   assert.equal(roomStatusText({ status: "finished", winner: 1, turn: 2 }), "黑方连成五子");
-  assert.equal(roomStatusText({ status: "waiting", winner: 0, turn: 1 }), "等待好友加入");
+  assert.equal(roomStatusText({ status: "waiting", winner: 0, turn: 1 }), "等待好友输入房间号");
 });
 
 test("board touch maps to nearest 15 by 15 intersection", () => {

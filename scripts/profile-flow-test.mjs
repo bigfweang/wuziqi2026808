@@ -243,7 +243,7 @@ try {
   const foreignKeyErrors = roundDb.prepare("PRAGMA foreign_key_check").all();
   assert.equal(settledRound.round, 1);
   assert.equal(currentRound.round, 2);
-  assert.equal(schemaVersion.user_version, 1);
+  assert.equal(schemaVersion.user_version, 2);
   assert.equal(integrity.integrity_check, "ok");
   assert.deepEqual(foreignKeyErrors, []);
   roundDb.close();

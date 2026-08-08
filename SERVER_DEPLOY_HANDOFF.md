@@ -12,6 +12,7 @@ Deploy the GitHub branch `feature/wechat-minigame-prototype` to the existing ser
 - Do not put an AppSecret in Git, source files, shell history, logs, or chat. A replacement AppSecret, once reset by the owner, belongs only in a server-side environment/secret store with restricted permissions.
 - Do not rewrite Git history or force-push.
 - If the working tree on the server contains uncommitted changes, preserve it and deploy from a separate release checkout rather than overwriting it.
+- Keep the application port bound to loopback (`127.0.0.1:3000`). Caddy is the only public ingress and supplies the client IP used by room rate limits.
 
 ## Discovery and backup
 
@@ -29,6 +30,7 @@ Deploy the GitHub branch `feature/wechat-minigame-prototype` to the existing ser
    - `npm ci`
    - `npm run build`
    - `npx -y node@24 --test minigame/test/*.test.js`
+   - `npx -y node@24 scripts/gameserver-broker-test.mjs`
    - `npx -y node@24 scripts/smoke-test.mjs`
    - `npx -y node@24 scripts/profile-flow-test.mjs`
    - `npm audit --omit=dev`
@@ -40,6 +42,12 @@ The repository Dockerfile already copies `.next/standalone`, `.next/static`, and
 
 ```bash
 ALLOW_DEV_AUTH=1 docker compose up -d --build
+```
+
+If Docker requires `sudo`, preserve the explicit test flag with `sudo env` (plain `sudo` may filter it):
+
+```bash
+sudo env ALLOW_DEV_AUTH=1 docker compose up -d --build
 ```
 
 `ALLOW_DEV_AUTH=1` is a temporary test-only setting because formal `wx.login` is not implemented yet. It must remain explicit and must be disabled after formal WeChat login is connected. Do not expose any AppSecret to the container until the formal server-side login implementation exists.

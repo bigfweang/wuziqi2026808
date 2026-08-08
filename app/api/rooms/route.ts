@@ -1,5 +1,7 @@
 import { findRoom, insertRoom, updateRoom, type RoomRow } from "../../../lib/db";
 import { EMPTY_BOARD, findWinningLine, parseBoard, type Move } from "../../../lib/gomoku";
+import { createRoomPassword, RoomPasswordError, verifyRoomPassword } from "../../../lib/room-password";
+import { consumeRequestLimit, type RateLimitResult } from "../../../lib/request-rate-limit";
 import { applyRoomCommand, resolveRoomSide, RoomCommandError } from "../../../lib/room-service";
 import { authenticateRequest, playerView } from "../../../lib/users";
 
@@ -7,6 +9,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const CODE_CHARS = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+const ROOM_CODE_PATTERN = /^[23456789A-HJ-NP-Z]{6}$/;
 const makeCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (byte) => CODE_CHARS[byte % CODE_CHARS.length]).join("");
 const makeToken = () => `${crypto.randomUUID()}-${crypto.randomUUID()}`;
 const cleanName = (value: unknown, fallback: string) => typeof value === "string" && value.trim() ? value.trim().slice(0, 12) : fallback;
@@ -46,6 +49,13 @@ function view(room: RoomRow, token: string, userId?: string) {
 
 const error = (message: string, status = 400) => Response.json({ error: message }, { status });
 
+function rateLimitError(result: RateLimitResult) {
+  return Response.json(
+    { error: "尝试过于频繁，请稍后再试" },
+    { status: 429, headers: { "Retry-After": String(result.retryAfterSeconds) } },
+  );
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const id = (url.searchParams.get("id") || "").toUpperCase();
@@ -64,7 +74,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  let payload: { action?: string; id?: string; name?: string; token?: string };
+  let payload: { action?: string; id?: string; name?: string; token?: string; password?: string };
   try {
     payload = await request.json() as typeof payload;
   } catch {
@@ -72,6 +82,20 @@ export async function POST(request: Request) {
   }
   const session = authenticateRequest(request);
   if (payload.action === "create") {
+    const requestLimit = consumeRequestLimit(request, session?.user.id, {
+      scope: "room-create",
+      userLimit: 10,
+      ipLimit: 20,
+      globalLimit: 30,
+    });
+    if (!requestLimit.allowed) return rateLimitError(requestLimit);
+    let roomPassword: Awaited<ReturnType<typeof createRoomPassword>>;
+    try {
+      roomPassword = await createRoomPassword(payload.password);
+    } catch (caught) {
+      if (caught instanceof RoomPasswordError) return error(caught.message);
+      throw caught;
+    }
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const id = makeCode();
       const token = makeToken();
@@ -82,6 +106,8 @@ export async function POST(request: Request) {
           session?.user.nickname || cleanName(payload.name, "我"),
           EMPTY_BOARD,
           session?.user.id,
+          roomPassword.salt,
+          roomPassword.hash,
         );
         return Response.json({ token, room: view(room, token, session?.user.id) }, { status: 201 });
       } catch (caught) {
@@ -93,12 +119,23 @@ export async function POST(request: Request) {
   if (payload.action === "join") {
     try {
       const id = (payload.id || "").trim().toUpperCase();
-      const current = id ? findRoom(id) : undefined;
+      if (!ROOM_CODE_PATTERN.test(id)) return error("房间号格式不正确");
+      const requestLimit = consumeRequestLimit(request, session?.user.id, {
+        scope: "room-join",
+        userLimit: 12,
+        ipLimit: 30,
+        globalLimit: 60,
+      });
+      if (!requestLimit.allowed) return rateLimitError(requestLimit);
+      const current = findRoom(id);
       if (!current) return error("没有找到这个房间", 404);
       const existingSide = sideFor(current, payload.token || null, session?.user.id);
       if (existingSide) {
         const existingToken = tokenFor(current, existingSide);
         return Response.json({ token: existingToken, room: view(current, existingToken || "", session?.user.id) });
+      }
+      if (!(await verifyRoomPassword(payload.password, current.password_salt, current.password_hash))) {
+        return error("房间密码不正确", 403);
       }
       if (current.white_token) return error("这局已经坐满啦", 409);
       const token = makeToken();

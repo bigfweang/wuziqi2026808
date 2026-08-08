@@ -295,7 +295,15 @@ class Renderer {
 
     this.playerCard(opponent, opponentSide, margin, 64, width, room.status === "active" && room.turn === opponentSide);
     this.fillPixelCard(margin + 25, 136, width - 50, 31, "#fffdf4", "#b89a6c", 2);
-    this.text(roomStatusText(room), this.width / 2, 151, 11, COLORS.ink, "center", 800);
+    this.text(
+      room.status === "waiting" ? `房间号 ${room.id} · 让好友直接输入` : roomStatusText(room),
+      this.width / 2,
+      151,
+      11,
+      COLORS.ink,
+      "center",
+      800,
+    );
 
     const boardSize = Math.min(width, Math.max(205, this.height - 420));
     const boardLayout = { x: (this.width - boardSize) / 2, y: 177, size: boardSize, padding: 18 };
@@ -310,7 +318,7 @@ class Renderer {
     this.button("undo", "悔一步", margin, actionY, actionWidth, 40, false, state.busy || room.status !== "active" || !room.moves.length);
     this.button("resign", "认输", margin + actionWidth + 8, actionY, actionWidth, 40, false, state.busy || room.status !== "active");
     const inviteY = actionY + 51;
-    this.button("share", room.status === "waiting" ? "↗ 发给微信好友，等 TA 加入" : "↗ 分享这局棋", margin, inviteY, width, 45, true, state.busy);
+    this.button("share", room.status === "waiting" ? "可选：发给微信好友" : "↗ 分享这局棋", margin, inviteY, width, 45, room.status !== "waiting", state.busy);
     this.text(`你执${selfSide === 1 ? "黑" : "白"} · 第 ${room.moves.length + (room.status === "finished" ? 0 : 1)} 手`, this.width / 2, inviteY + 60, 8, COLORS.muted, "center", 600);
 
     if (room.status === "finished") this.renderResult(state, selfSide);

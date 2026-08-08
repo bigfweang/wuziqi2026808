@@ -39,12 +39,20 @@ class GameApi {
     return this.call("/api/me");
   }
 
-  createRoom() {
-    return this.call("/api/rooms", "POST", { action: "create" });
+  createRoom(password = "") {
+    return this.call("/api/rooms", "POST", { action: "create", password });
   }
 
-  joinRoom(roomId) {
-    return this.call("/api/rooms", "POST", { action: "join", id: roomId });
+  joinRoom(roomId, password = "") {
+    return this.call("/api/rooms", "POST", { action: "join", id: roomId, password });
+  }
+
+  registerGameServerRoom(roomId, accessInfo, ttlSeconds = 600) {
+    return this.call("/api/gameserver/rooms", "PUT", { roomId, accessInfo, ttlSeconds });
+  }
+
+  gameServerRoom(roomId) {
+    return this.call(`/api/gameserver/rooms?id=${encodeURIComponent(roomId)}`);
   }
 
   room(roomId) {

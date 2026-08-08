@@ -39,7 +39,7 @@
       }
       function roomStatusText(room) {
         if (!room) return "\u6B63\u5728\u8FDE\u63A5\u68CB\u5C40";
-        if (room.status === "waiting") return "\u7B49\u5F85\u597D\u53CB\u52A0\u5165";
+        if (room.status === "waiting") return "\u7B49\u5F85\u597D\u53CB\u8F93\u5165\u623F\u95F4\u53F7";
         if (room.status === "finished") {
           if (room.winner === 1) return "\u9ED1\u65B9\u8FDE\u6210\u4E94\u5B50";
           if (room.winner === 2) return "\u767D\u65B9\u8FDE\u6210\u4E94\u5B50";
@@ -172,11 +172,41 @@
             });
           });
         }
-        function shareRoom(roomId) {
-          const payload = {
+        function promptRoomPassword(title, confirmText) {
+          return new Promise((resolve) => {
+            wxApi.showModal({
+              title,
+              content: "",
+              editable: true,
+              placeholderText: "\u53EF\u9009\uFF1A4\u201316 \u4F4D\u5BC6\u7801\uFF1B\u65E0\u5BC6\u7801\u53EF\u7559\u7A7A",
+              confirmText,
+              success(result) {
+                resolve(result.confirm ? String(result.content || "").trim() : null);
+              },
+              fail() {
+                resolve(null);
+              }
+            });
+          });
+        }
+        async function promptCreateRoom() {
+          const password = await promptRoomPassword("\u521B\u5EFA\u597D\u53CB\u68CB\u5C40", "\u521B\u5EFA");
+          return password === null ? null : { password };
+        }
+        async function promptJoinRoom(prefilledRoomCode = "") {
+          const roomCode = normalizeRoomCode(prefilledRoomCode) || await promptRoomCode();
+          if (!roomCode) return null;
+          const password = await promptRoomPassword(`\u52A0\u5165\u623F\u95F4 ${roomCode}`, "\u52A0\u5165");
+          return password === null ? null : { roomCode, password };
+        }
+        function sharePayload(roomId) {
+          return roomId ? {
             title: `\u6765\u548C\u6211\u4E0B\u4E00\u76D8\u50CF\u7D20\u4E94\u5B50\u68CB\uFF5C\u623F\u95F4 ${roomId}`,
             query: inviteQuery(roomId)
-          };
+          } : { title: "\u50CF\u7D20\u4E94\u5B50\u68CB\uFF5C\u843D\u5B50\u65E0\u58F0\uFF0C\u53CB\u60C5\u6709\u56DE\u58F0" };
+        }
+        function shareRoom(roomId) {
+          const payload = sharePayload(roomId);
           if (typeof wxApi.shareAppMessage === "function") wxApi.shareAppMessage(payload);
           return payload;
         }
@@ -185,13 +215,7 @@
             wxApi.showShareMenu({ menus: ["shareAppMessage"], withShareTicket: true });
           }
           if (typeof wxApi.onShareAppMessage === "function") {
-            wxApi.onShareAppMessage(() => {
-              const roomId = getRoomId();
-              return roomId ? {
-                title: `\u6765\u548C\u6211\u4E0B\u4E00\u76D8\u50CF\u7D20\u4E94\u5B50\u68CB\uFF5C\u623F\u95F4 ${roomId}`,
-                query: inviteQuery(roomId)
-              } : { title: "\u50CF\u7D20\u4E94\u5B50\u68CB\uFF5C\u843D\u5B50\u65E0\u58F0\uFF0C\u53CB\u60C5\u6709\u56DE\u58F0" };
-            });
+            wxApi.onShareAppMessage(() => sharePayload(getRoomId()));
           }
         }
         function launchQuery() {
@@ -217,6 +241,8 @@
           removeStorage,
           onTap,
           promptRoomCode,
+          promptCreateRoom,
+          promptJoinRoom,
           shareRoom,
           configureShare,
           launchQuery,
@@ -269,11 +295,17 @@
         me() {
           return this.call("/api/me");
         }
-        createRoom() {
-          return this.call("/api/rooms", "POST", { action: "create" });
+        createRoom(password = "") {
+          return this.call("/api/rooms", "POST", { action: "create", password });
         }
-        joinRoom(roomId) {
-          return this.call("/api/rooms", "POST", { action: "join", id: roomId });
+        joinRoom(roomId, password = "") {
+          return this.call("/api/rooms", "POST", { action: "join", id: roomId, password });
+        }
+        registerGameServerRoom(roomId, accessInfo, ttlSeconds = 600) {
+          return this.call("/api/gameserver/rooms", "PUT", { roomId, accessInfo, ttlSeconds });
+        }
+        gameServerRoom(roomId) {
+          return this.call(`/api/gameserver/rooms?id=${encodeURIComponent(roomId)}`);
         }
         room(roomId) {
           return this.call(`/api/rooms?id=${encodeURIComponent(roomId)}`);
@@ -584,7 +616,15 @@
           const opponent = opponentSide === 1 ? room.blackPlayer : room.whitePlayer;
           this.playerCard(opponent, opponentSide, margin, 64, width, room.status === "active" && room.turn === opponentSide);
           this.fillPixelCard(margin + 25, 136, width - 50, 31, "#fffdf4", "#b89a6c", 2);
-          this.text(roomStatusText(room), this.width / 2, 151, 11, COLORS.ink, "center", 800);
+          this.text(
+            room.status === "waiting" ? `\u623F\u95F4\u53F7 ${room.id} \xB7 \u8BA9\u597D\u53CB\u76F4\u63A5\u8F93\u5165` : roomStatusText(room),
+            this.width / 2,
+            151,
+            11,
+            COLORS.ink,
+            "center",
+            800
+          );
           const boardSize = Math.min(width, Math.max(205, this.height - 420));
           const boardLayout = { x: (this.width - boardSize) / 2, y: 177, size: boardSize, padding: 18 };
           this.layout.board = boardLayout;
@@ -597,7 +637,7 @@
           this.button("undo", "\u6094\u4E00\u6B65", margin, actionY, actionWidth, 40, false, state.busy || room.status !== "active" || !room.moves.length);
           this.button("resign", "\u8BA4\u8F93", margin + actionWidth + 8, actionY, actionWidth, 40, false, state.busy || room.status !== "active");
           const inviteY = actionY + 51;
-          this.button("share", room.status === "waiting" ? "\u2197 \u53D1\u7ED9\u5FAE\u4FE1\u597D\u53CB\uFF0C\u7B49 TA \u52A0\u5165" : "\u2197 \u5206\u4EAB\u8FD9\u5C40\u68CB", margin, inviteY, width, 45, true, state.busy);
+          this.button("share", room.status === "waiting" ? "\u53EF\u9009\uFF1A\u53D1\u7ED9\u5FAE\u4FE1\u597D\u53CB" : "\u2197 \u5206\u4EAB\u8FD9\u5C40\u68CB", margin, inviteY, width, 45, room.status !== "waiting", state.busy);
           this.text(`\u4F60\u6267${selfSide === 1 ? "\u9ED1" : "\u767D"} \xB7 \u7B2C ${room.moves.length + (room.status === "finished" ? 0 : 1)} \u624B`, this.width / 2, inviteY + 60, 8, COLORS.muted, "center", 600);
           if (room.status === "finished") this.renderResult(state, selfSide);
         }
@@ -654,9 +694,10 @@
       } = require_core();
       var { Renderer } = require_renderer();
       var PixelGomokuApp2 = class {
-        constructor({ platform: platform2, config: config2 }) {
+        constructor({ platform: platform2, config: config2, gameServer: gameServer2 = null }) {
           this.platform = platform2;
           this.config = config2;
+          this.gameServer = gameServer2;
           this.api = new GameApi(platform2, config2.API_BASE);
           this.renderer = null;
           this.pollTimer = null;
@@ -736,7 +777,7 @@
               activeRoom: profile.activeRoom || null
             });
             const launchRoom = normalizeRoomCode(this.platform.launchQuery().room);
-            if (launchRoom) await this.joinRoom(launchRoom);
+            if (launchRoom) await this.promptAndJoin(launchRoom);
             else await this.refreshProfile();
           } catch (caught) {
             this.setState({ screen: "home" });
@@ -779,32 +820,48 @@
           if (!this.api.token || this.state.busy) return;
           this.setState({ busy: true });
           try {
-            const result = await this.api.createRoom();
+            const creation = await this.platform.promptCreateRoom();
+            if (!creation) return;
+            const result = await this.api.createRoom(creation.password);
             this.enterRoom(result.room);
-            this.toast("\u623F\u95F4\u5F00\u597D\u5566\uFF0C\u53D1\u7ED9\u597D\u53CB\u5427");
+            let gameServerReady = false;
+            if (this.gameServer) {
+              try {
+                gameServerReady = await this.gameServer.hostRoom(result.room.id, this.api);
+              } catch {
+              }
+            }
+            this.toast(gameServerReady ? `\u623F\u95F4 ${result.room.id} \u5DF2\u521B\u5EFA\uFF0C\u597D\u53CB\u53EF\u76F4\u63A5\u8F93\u5165\u623F\u95F4\u53F7` : `\u623F\u95F4 ${result.room.id} \u5DF2\u521B\u5EFA\uFF0C\u53EF\u76F4\u63A5\u8F93\u5165\u623F\u95F4\u53F7\u52A0\u5165`);
           } catch (caught) {
             this.toast(this.errorMessage(caught, "\u521B\u5EFA\u623F\u95F4\u5931\u8D25"));
           } finally {
             this.setState({ busy: false });
           }
         }
-        async joinRoom(roomCode) {
+        async joinRoom(roomCode, password = "") {
           const roomId = normalizeRoomCode(roomCode);
           if (!roomId || this.state.busy) return;
           this.setState({ busy: true });
           try {
-            const result = await this.api.joinRoom(roomId);
+            const result = await this.api.joinRoom(roomId, password);
             this.enterRoom(result.room);
-            this.toast("\u5DF2\u52A0\u5165\u597D\u53CB\u68CB\u5C40");
+            let gameServerReady = false;
+            if (this.gameServer) {
+              try {
+                gameServerReady = await this.gameServer.guestRoom(roomId, this.api);
+              } catch {
+              }
+            }
+            this.toast(gameServerReady ? "\u5DF2\u901A\u8FC7\u623F\u95F4\u53F7\u52A0\u5165\u5FAE\u4FE1\u8054\u673A" : "\u5DF2\u52A0\u5165\u597D\u53CB\u68CB\u5C40");
           } catch (caught) {
             this.toast(this.errorMessage(caught, "\u52A0\u5165\u623F\u95F4\u5931\u8D25"));
           } finally {
             this.setState({ busy: false });
           }
         }
-        async promptAndJoin() {
-          const code = await this.platform.promptRoomCode();
-          if (code) await this.joinRoom(code);
+        async promptAndJoin(prefilledRoomCode = "") {
+          const join = await this.platform.promptJoinRoom(prefilledRoomCode);
+          if (join) await this.joinRoom(join.roomCode, join.password);
         }
         async resumeRoom() {
           const active = this.state.activeRoom;
@@ -813,11 +870,30 @@
           try {
             const result = await this.api.room(active.id);
             this.enterRoom(result.room);
+            await this.reconnectGameServer(result.room);
           } catch (caught) {
             this.toast(this.errorMessage(caught, "\u68CB\u5C40\u6062\u590D\u5931\u8D25"));
             await this.refreshProfile();
           } finally {
             this.setState({ busy: false });
+          }
+        }
+        gameServerStatus(event, detail) {
+          if (event === "peer-message") {
+            this.toast(detail && detail.role === "host" ? "\u597D\u53CB\u5DF2\u901A\u8FC7\u5FAE\u4FE1\u623F\u95F4\u8FDE\u4E0A" : "\u5DF2\u6536\u5230\u623F\u4E3B\u7684\u5FAE\u4FE1\u8054\u673A\u56DE\u6267");
+          } else if (event === "room-disconnected") {
+            this.toast("\u5FAE\u4FE1\u8054\u673A\u77ED\u6682\u65AD\u5F00\uFF0C\u6B63\u5728\u6062\u590D");
+          } else if (event === "room-reconnect-failed") {
+            this.toast("\u5FAE\u4FE1\u8054\u673A\u6062\u590D\u5931\u8D25\uFF0C\u68CB\u5C40\u4ECD\u53EF\u7EE7\u7EED");
+          }
+        }
+        async reconnectGameServer(room) {
+          if (!this.gameServer || !room || room.status === "finished") return false;
+          try {
+            return await this.gameServer.reconnectRoom(room.id, room.side, this.api);
+          } catch {
+            this.gameServerStatus("room-reconnect-failed", { role: room.side === 1 ? "host" : "guest" });
+            return false;
           }
         }
         async refreshRoom(showError) {
@@ -849,9 +925,13 @@
             this.setState({ busy: false });
           }
         }
-        handleShow() {
-          if (this.state.screen === "game") this.refreshRoom(false);
-          else this.refreshProfile();
+        async handleShow() {
+          if (this.state.screen === "game") {
+            await this.refreshRoom(false);
+            await this.reconnectGameServer(this.state.room);
+          } else {
+            await this.refreshProfile();
+          }
         }
         async handleTap(x, y) {
           const id = this.renderer.hitAt(x, y);
@@ -885,6 +965,197 @@
     }
   });
 
+  // minigame/src/gameserver-bridge.js
+  var require_gameserver_bridge = __commonJS({
+    "minigame/src/gameserver-bridge.js"(exports, module) {
+      "use strict";
+      var ROOM_EXT_PREFIX = "pixel-gomoku:";
+      var MESSAGE_TYPE = "pixel-gomoku-gsm-v1";
+      function dataOf(result) {
+        return result && result.data ? result.data : result || {};
+      }
+      function safeCode(error) {
+        return error && (error.errCode || error.code) ? String(error.errCode || error.code) : "";
+      }
+      function operationError(stage, error) {
+        const code = safeCode(error);
+        return new Error(`\u5FAE\u4FE1\u8054\u673A${stage}\u5931\u8D25${code ? `\uFF08${code}\uFF09` : ""}`);
+      }
+      function callbackOperation(invoke) {
+        return new Promise((resolve, reject) => {
+          invoke({ success: resolve, fail: reject });
+        });
+      }
+      var GameServerBridge2 = class {
+        constructor({ wxApi, platform: platform2, onStatus = () => {
+        } }) {
+          this.wxApi = wxApi;
+          this.platform = platform2;
+          this.onStatus = onStatus;
+          this.manager = null;
+          this.readyPromise = null;
+          this.listenersReady = false;
+          this.roomId = "";
+          this.role = "";
+          this.api = null;
+          this.reconnectPending = false;
+        }
+        status(event, detail = {}) {
+          this.onStatus(event, detail);
+        }
+        isDeviceRuntime() {
+          if (!this.wxApi || this.platform.isPreview) return false;
+          try {
+            const deviceInfo = typeof this.wxApi.getDeviceInfo === "function" ? this.wxApi.getDeviceInfo() : {};
+            if (String(deviceInfo.platform || "").toLowerCase() === "devtools") return false;
+          } catch {
+          }
+          return typeof this.wxApi.getGameServerManager === "function";
+        }
+        attachListeners() {
+          if (this.listenersReady || !this.manager) return;
+          this.listenersReady = true;
+          if (typeof this.manager.onBroadcast === "function") {
+            this.manager.onBroadcast((result) => {
+              let message;
+              try {
+                message = JSON.parse(String(result && result.msg || ""));
+              } catch {
+                return;
+              }
+              if (!message || message.type !== MESSAGE_TYPE || message.roomId !== this.roomId) return;
+              if (message.event === "ping" && this.role === "host") {
+                this.status("peer-message", { role: "host" });
+                this.broadcast("ack");
+              } else if (message.event === "ack" && this.role === "guest") {
+                this.status("peer-message", { role: "guest" });
+              }
+            });
+          }
+          if (typeof this.manager.onDisconnect === "function") {
+            this.manager.onDisconnect((error) => {
+              void this.reconnectAfterDisconnect(error);
+            });
+          }
+        }
+        async reconnectAfterDisconnect(error) {
+          if (!this.roomId || !this.role || !this.api || this.reconnectPending) return false;
+          const roomId = this.roomId;
+          const role = this.role;
+          const side = role === "host" ? 1 : 2;
+          this.status("room-disconnected", { roomId, role, errCode: safeCode(error) });
+          try {
+            return await this.reconnectRoom(roomId, side, this.api);
+          } catch {
+            this.status("room-reconnect-failed", { roomId, role });
+            return false;
+          }
+        }
+        ensureReady() {
+          if (!this.isDeviceRuntime()) return Promise.resolve(false);
+          if (this.readyPromise) return this.readyPromise;
+          this.manager = this.wxApi.getGameServerManager();
+          this.readyPromise = this.manager.login().then(() => {
+            this.attachListeners();
+            this.status("login-ok");
+            return true;
+          }).catch((error) => {
+            this.status("login-failed", { errCode: safeCode(error) });
+            throw operationError("\u767B\u5F55", error);
+          });
+          return this.readyPromise;
+        }
+        broadcast(event) {
+          if (!this.manager || !this.roomId) return;
+          this.manager.broadcastInRoom({
+            msg: JSON.stringify({ type: MESSAGE_TYPE, event, roomId: this.roomId }),
+            success: () => this.status("broadcast-sent", { event, role: this.role }),
+            fail: (error) => this.status("broadcast-failed", { event, errCode: safeCode(error) })
+          });
+        }
+        async hostRoom(roomId, api) {
+          if (!await this.ensureReady()) return false;
+          let result;
+          try {
+            result = await callbackOperation(({ success, fail }) => this.manager.createRoom({
+              maxMemberNum: 2,
+              startPercent: 100,
+              needUserInfo: false,
+              gameLastTime: 600,
+              roomExtInfo: `${ROOM_EXT_PREFIX}${roomId}`,
+              success,
+              fail
+            }));
+          } catch (error) {
+            throw operationError("\u5EFA\u623F", error);
+          }
+          const accessInfo = String(dataOf(result).accessInfo || "");
+          if (!accessInfo) throw new Error("\u5FAE\u4FE1\u8054\u673A\u5EFA\u623F\u5931\u8D25\uFF08\u7F3A\u5C11\u623F\u95F4\u51ED\u8BC1\uFF09");
+          await api.registerGameServerRoom(roomId, accessInfo, 600);
+          this.roomId = roomId;
+          this.role = "host";
+          this.api = api;
+          this.status("host-ready", { roomId });
+          return true;
+        }
+        async guestRoom(roomId, api) {
+          if (!await this.ensureReady()) return false;
+          const broker = await api.gameServerRoom(roomId);
+          try {
+            await callbackOperation(({ success, fail }) => this.manager.joinRoom({
+              accessInfo: broker.accessInfo,
+              success,
+              fail
+            }));
+          } catch (error) {
+            throw operationError("\u52A0\u5165", error);
+          }
+          this.roomId = roomId;
+          this.role = "guest";
+          this.api = api;
+          this.status("guest-ready", { roomId });
+          this.broadcast("ping");
+          return true;
+        }
+        async lastRoomInfo() {
+          try {
+            return dataOf(await callbackOperation(({ success, fail }) => {
+              this.manager.getLastRoomInfo({ success, fail });
+            }));
+          } catch {
+            return {};
+          }
+        }
+        async reconnectRoom(roomId, side, api) {
+          if (this.reconnectPending) return false;
+          this.reconnectPending = true;
+          try {
+            if (!await this.ensureReady()) return false;
+            const lastRoom = await this.lastRoomInfo();
+            const roomExtInfo = lastRoom.roomInfo && lastRoom.roomInfo.roomExtInfo;
+            if (lastRoom.accessInfo && roomExtInfo === `${ROOM_EXT_PREFIX}${roomId}`) {
+              try {
+                await this.manager.reconnect({ accessInfo: lastRoom.accessInfo });
+              } catch (error) {
+                throw operationError("\u91CD\u8FDE", error);
+              }
+              this.roomId = roomId;
+              this.role = side === 1 ? "host" : "guest";
+              this.api = api;
+              this.status("room-reconnected", { roomId, role: this.role });
+              if (this.role === "guest") this.broadcast("ping");
+              return true;
+            }
+            return side === 1 ? this.hostRoom(roomId, api) : this.guestRoom(roomId, api);
+          } finally {
+            this.reconnectPending = false;
+          }
+        }
+      };
+      module.exports = { GameServerBridge: GameServerBridge2, MESSAGE_TYPE, ROOM_EXT_PREFIX };
+    }
+  });
+
   // minigame/src/config.js
   var require_config = __commonJS({
     "minigame/src/config.js"(exports, module) {
@@ -892,6 +1163,7 @@
       var API_BASE = typeof globalThis !== "undefined" && globalThis.__PIXEL_GOMOKU_API_BASE__ ? String(globalThis.__PIXEL_GOMOKU_API_BASE__).replace(/\/$/, "") : "https://game.lmbostudio.cn";
       module.exports = {
         API_BASE,
+        GAMESERVER_BRIDGE: true,
         POLL_MS: 1400,
         STORAGE_PREFIX: "pixel-gomoku-dev:"
       };
@@ -901,9 +1173,16 @@
   // minigame/game.js
   var { createPlatform } = require_platform();
   var { PixelGomokuApp } = require_app();
+  var { GameServerBridge } = require_gameserver_bridge();
   var config = require_config();
   var platform = createPlatform(typeof wx === "undefined" ? null : wx);
-  var app = new PixelGomokuApp({ platform, config });
+  var app = null;
+  var gameServer = config.GAMESERVER_BRIDGE && typeof wx !== "undefined" ? new GameServerBridge({
+    wxApi: wx,
+    platform,
+    onStatus: (event, detail) => app && app.gameServerStatus(event, detail)
+  }) : null;
+  app = new PixelGomokuApp({ platform, config, gameServer });
   app.start();
   if (typeof GameGlobal !== "undefined") GameGlobal.pixelGomokuApp = app;
   if (typeof globalThis !== "undefined") globalThis.pixelGomokuApp = app;

@@ -70,11 +70,43 @@ function createPlatform(wxApi) {
     });
   }
 
-  function shareRoom(roomId) {
-    const payload = {
+  function promptRoomPassword(title, confirmText) {
+    return new Promise((resolve) => {
+      wxApi.showModal({
+        title,
+        content: "",
+        editable: true,
+        placeholderText: "可选：4–16 位密码；无密码可留空",
+        confirmText,
+        success(result) {
+          resolve(result.confirm ? String(result.content || "").trim() : null);
+        },
+        fail() { resolve(null); },
+      });
+    });
+  }
+
+  async function promptCreateRoom() {
+    const password = await promptRoomPassword("创建好友棋局", "创建");
+    return password === null ? null : { password };
+  }
+
+  async function promptJoinRoom(prefilledRoomCode = "") {
+    const roomCode = normalizeRoomCode(prefilledRoomCode) || await promptRoomCode();
+    if (!roomCode) return null;
+    const password = await promptRoomPassword(`加入房间 ${roomCode}`, "加入");
+    return password === null ? null : { roomCode, password };
+  }
+
+  function sharePayload(roomId) {
+    return roomId ? {
       title: `来和我下一盘像素五子棋｜房间 ${roomId}`,
       query: inviteQuery(roomId),
-    };
+    } : { title: "像素五子棋｜落子无声，友情有回声" };
+  }
+
+  function shareRoom(roomId) {
+    const payload = sharePayload(roomId);
     if (typeof wxApi.shareAppMessage === "function") wxApi.shareAppMessage(payload);
     return payload;
   }
@@ -84,15 +116,10 @@ function createPlatform(wxApi) {
       wxApi.showShareMenu({ menus: ["shareAppMessage"], withShareTicket: true });
     }
     if (typeof wxApi.onShareAppMessage === "function") {
-      wxApi.onShareAppMessage(() => {
-        const roomId = getRoomId();
-        return roomId ? {
-          title: `来和我下一盘像素五子棋｜房间 ${roomId}`,
-          query: inviteQuery(roomId),
-        } : { title: "像素五子棋｜落子无声，友情有回声" };
-      });
+      wxApi.onShareAppMessage(() => sharePayload(getRoomId()));
     }
   }
+
 
   function launchQuery() {
     try {
@@ -121,6 +148,8 @@ function createPlatform(wxApi) {
     removeStorage,
     onTap,
     promptRoomCode,
+    promptCreateRoom,
+    promptJoinRoom,
     shareRoom,
     configureShare,
     launchQuery,

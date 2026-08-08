@@ -15,6 +15,8 @@ export type RoomRow = {
   winner: number;
   black_user_id: string | null;
   white_user_id: string | null;
+  password_salt: string | null;
+  password_hash: string | null;
   round: number;
   revision: number;
   created_at: string;
@@ -77,6 +79,8 @@ function migrateDatabase(db: DatabaseSync) {
     const migrations = [
       ["black_user_id", "ALTER TABLE rooms ADD COLUMN black_user_id TEXT"],
       ["white_user_id", "ALTER TABLE rooms ADD COLUMN white_user_id TEXT"],
+      ["password_salt", "ALTER TABLE rooms ADD COLUMN password_salt TEXT"],
+      ["password_hash", "ALTER TABLE rooms ADD COLUMN password_hash TEXT"],
       ["round", "ALTER TABLE rooms ADD COLUMN round INTEGER NOT NULL DEFAULT 1"],
     ] as const;
     for (const [column, sql] of migrations) {
@@ -112,12 +116,22 @@ function migrateDatabase(db: DatabaseSync) {
         ended_at TEXT NOT NULL,
         UNIQUE(room_id, round)
       );
+      CREATE TABLE IF NOT EXISTS gameserver_rooms (
+        room_id TEXT PRIMARY KEY NOT NULL,
+        owner_user_id TEXT NOT NULL,
+        access_info TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        FOREIGN KEY(room_id) REFERENCES rooms(id) ON DELETE CASCADE,
+        FOREIGN KEY(owner_user_id) REFERENCES users(id)
+      );
       CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);
       CREATE INDEX IF NOT EXISTS matches_black_user_idx ON matches(black_user_id, ended_at DESC);
       CREATE INDEX IF NOT EXISTS matches_white_user_idx ON matches(white_user_id, ended_at DESC);
       CREATE INDEX IF NOT EXISTS rooms_black_user_idx ON rooms(black_user_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS rooms_white_user_idx ON rooms(white_user_id, updated_at DESC);
-      PRAGMA user_version = 1;
+      CREATE INDEX IF NOT EXISTS gameserver_rooms_expires_idx ON gameserver_rooms(expires_at);
+      PRAGMA user_version = 2;
     `);
     db.exec("COMMIT");
   } catch (caught) {
@@ -164,12 +178,30 @@ export function findRoom(id: string) {
   return findRoomIn(getDb(), id);
 }
 
-export function insertRoom(id: string, blackToken: string, blackName: string, board: string, blackUserId?: string) {
+export function insertRoom(
+  id: string,
+  blackToken: string,
+  blackName: string,
+  board: string,
+  blackUserId?: string,
+  passwordSalt?: string | null,
+  passwordHash?: string | null,
+) {
   return getDb().prepare(`
-    INSERT INTO rooms (id, black_token, black_name, board, black_user_id)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO rooms (
+      id, black_token, black_name, board, black_user_id,
+      password_salt, password_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
     RETURNING *
-  `).get(id, blackToken, blackName, board, blackUserId || null) as RoomRow;
+  `).get(
+    id,
+    blackToken,
+    blackName,
+    board,
+    blackUserId || null,
+    passwordSalt || null,
+    passwordHash || null,
+  ) as RoomRow;
 }
 
 export function updateRoomIn(db: DatabaseSync, id: string, revision: number, patch: RoomPatch) {

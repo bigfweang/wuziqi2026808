@@ -9,9 +9,10 @@ const {
 const { Renderer } = require("./renderer");
 
 class PixelGomokuApp {
-  constructor({ platform, config }) {
+  constructor({ platform, config, gameServer = null }) {
     this.platform = platform;
     this.config = config;
+    this.gameServer = gameServer;
     this.api = new GameApi(platform, config.API_BASE);
     this.renderer = null;
     this.pollTimer = null;
@@ -94,7 +95,7 @@ class PixelGomokuApp {
         activeRoom: profile.activeRoom || null,
       });
       const launchRoom = normalizeRoomCode(this.platform.launchQuery().room);
-      if (launchRoom) await this.joinRoom(launchRoom);
+      if (launchRoom) await this.promptAndJoin(launchRoom);
       else await this.refreshProfile();
     } catch (caught) {
       this.setState({ screen: "home" });
@@ -141,9 +142,17 @@ class PixelGomokuApp {
     if (!this.api.token || this.state.busy) return;
     this.setState({ busy: true });
     try {
-      const result = await this.api.createRoom();
+      const creation = await this.platform.promptCreateRoom();
+      if (!creation) return;
+      const result = await this.api.createRoom(creation.password);
       this.enterRoom(result.room);
-      this.toast("房间开好啦，发给好友吧");
+      let gameServerReady = false;
+      if (this.gameServer) {
+        try { gameServerReady = await this.gameServer.hostRoom(result.room.id, this.api); } catch {}
+      }
+      this.toast(gameServerReady
+        ? `房间 ${result.room.id} 已创建，好友可直接输入房间号`
+        : `房间 ${result.room.id} 已创建，可直接输入房间号加入`);
     } catch (caught) {
       this.toast(this.errorMessage(caught, "创建房间失败"));
     } finally {
@@ -151,14 +160,18 @@ class PixelGomokuApp {
     }
   }
 
-  async joinRoom(roomCode) {
+  async joinRoom(roomCode, password = "") {
     const roomId = normalizeRoomCode(roomCode);
     if (!roomId || this.state.busy) return;
     this.setState({ busy: true });
     try {
-      const result = await this.api.joinRoom(roomId);
+      const result = await this.api.joinRoom(roomId, password);
       this.enterRoom(result.room);
-      this.toast("已加入好友棋局");
+      let gameServerReady = false;
+      if (this.gameServer) {
+        try { gameServerReady = await this.gameServer.guestRoom(roomId, this.api); } catch {}
+      }
+      this.toast(gameServerReady ? "已通过房间号加入微信联机" : "已加入好友棋局");
     } catch (caught) {
       this.toast(this.errorMessage(caught, "加入房间失败"));
     } finally {
@@ -166,9 +179,9 @@ class PixelGomokuApp {
     }
   }
 
-  async promptAndJoin() {
-    const code = await this.platform.promptRoomCode();
-    if (code) await this.joinRoom(code);
+  async promptAndJoin(prefilledRoomCode = "") {
+    const join = await this.platform.promptJoinRoom(prefilledRoomCode);
+    if (join) await this.joinRoom(join.roomCode, join.password);
   }
 
   async resumeRoom() {
@@ -178,11 +191,34 @@ class PixelGomokuApp {
     try {
       const result = await this.api.room(active.id);
       this.enterRoom(result.room);
+      await this.reconnectGameServer(result.room);
     } catch (caught) {
       this.toast(this.errorMessage(caught, "棋局恢复失败"));
       await this.refreshProfile();
     } finally {
       this.setState({ busy: false });
+    }
+  }
+
+  gameServerStatus(event, detail) {
+    if (event === "peer-message") {
+      this.toast(detail && detail.role === "host"
+        ? "好友已通过微信房间连上"
+        : "已收到房主的微信联机回执");
+    } else if (event === "room-disconnected") {
+      this.toast("微信联机短暂断开，正在恢复");
+    } else if (event === "room-reconnect-failed") {
+      this.toast("微信联机恢复失败，棋局仍可继续");
+    }
+  }
+
+  async reconnectGameServer(room) {
+    if (!this.gameServer || !room || room.status === "finished") return false;
+    try {
+      return await this.gameServer.reconnectRoom(room.id, room.side, this.api);
+    } catch {
+      this.gameServerStatus("room-reconnect-failed", { role: room.side === 1 ? "host" : "guest" });
+      return false;
     }
   }
 
@@ -217,9 +253,13 @@ class PixelGomokuApp {
     }
   }
 
-  handleShow() {
-    if (this.state.screen === "game") this.refreshRoom(false);
-    else this.refreshProfile();
+  async handleShow() {
+    if (this.state.screen === "game") {
+      await this.refreshRoom(false);
+      await this.reconnectGameServer(this.state.room);
+    } else {
+      await this.refreshProfile();
+    }
   }
 
   async handleTap(x, y) {

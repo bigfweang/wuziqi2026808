@@ -13,6 +13,7 @@
     "build:minigame-preview": "node scripts/build-minigame-preview.mjs",
     "start": "next start",
     "test:minigame": "node --test minigame/test/*.test.js",
+    "test:gameserver": "node scripts/gameserver-broker-test.mjs",
     "test:profile": "node scripts/profile-flow-test.mjs",
     "test:smoke": "node scripts/smoke-test.mjs"
   },

@@ -27,7 +27,7 @@ function parseBoard(value) {
 
 function roomStatusText(room) {
   if (!room) return "正在连接棋局";
-  if (room.status === "waiting") return "等待好友加入";
+  if (room.status === "waiting") return "等待好友输入房间号";
   if (room.status === "finished") {
     if (room.winner === 1) return "黑方连成五子";
     if (room.winner === 2) return "白方连成五子";

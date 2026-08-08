@@ -26,6 +26,7 @@ A quiet, friendly tabletop game rendered as a compact pixel interface: warm wood
 - Player identity always appears as avatar + nickname + presence dot + side.
 - The board remains square. On short screens it shrinks before controls are clipped.
 - A waiting opponent uses a visible placeholder and “等待好友”; never fake an online player.
+- Human-readable room code is the primary multiplayer entry; native sharing is visually secondary and always optional.
 - Win/loss/draw are textually distinct; a full board with `winner = 0` is explicitly “和棋”.
 - Generated avatars are shown with nearest-neighbour image scaling and a 2 px dark border.
 
