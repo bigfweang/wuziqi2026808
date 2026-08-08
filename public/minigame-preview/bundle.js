@@ -889,7 +889,7 @@
   var require_config = __commonJS({
     "minigame/src/config.js"(exports, module) {
       "use strict";
-      var API_BASE = typeof globalThis !== "undefined" && globalThis.__PIXEL_GOMOKU_API_BASE__ ? String(globalThis.__PIXEL_GOMOKU_API_BASE__).replace(/\/$/, "") : "http://127.0.0.1:3000";
+      var API_BASE = typeof globalThis !== "undefined" && globalThis.__PIXEL_GOMOKU_API_BASE__ ? String(globalThis.__PIXEL_GOMOKU_API_BASE__).replace(/\/$/, "") : "https://game.lmbostudio.cn";
       module.exports = {
         API_BASE,
         POLL_MS: 1400,
