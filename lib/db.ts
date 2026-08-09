@@ -18,6 +18,8 @@ export type RoomRow = {
   white_user_id: string | null;
   password_salt: string | null;
   password_hash: string | null;
+  black_undos_used: number;
+  white_undos_used: number;
   round: number;
   revision: number;
   created_at: string;
@@ -34,6 +36,8 @@ export type RoomPatch = {
   winner?: number;
   blackUserId?: string | null;
   whiteUserId?: string | null;
+  blackUndosUsed?: number;
+  whiteUndosUsed?: number;
   round?: number;
 };
 
@@ -47,6 +51,8 @@ const columns: Record<keyof RoomPatch, string> = {
   winner: "winner",
   blackUserId: "black_user_id",
   whiteUserId: "white_user_id",
+  blackUndosUsed: "black_undos_used",
+  whiteUndosUsed: "white_undos_used",
   round: "round",
 };
 
@@ -54,7 +60,7 @@ declare global {
   var pixelGomokuDb: DatabaseSync | undefined;
 }
 
-const SUPPORTED_DATABASE_VERSION = 4;
+const SUPPORTED_DATABASE_VERSION = 5;
 
 export function migrateDatabase(db: DatabaseSync) {
   const currentVersion = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
@@ -88,6 +94,8 @@ export function migrateDatabase(db: DatabaseSync) {
       ["white_user_id", "ALTER TABLE rooms ADD COLUMN white_user_id TEXT"],
       ["password_salt", "ALTER TABLE rooms ADD COLUMN password_salt TEXT"],
       ["password_hash", "ALTER TABLE rooms ADD COLUMN password_hash TEXT"],
+      ["black_undos_used", "ALTER TABLE rooms ADD COLUMN black_undos_used INTEGER NOT NULL DEFAULT 0"],
+      ["white_undos_used", "ALTER TABLE rooms ADD COLUMN white_undos_used INTEGER NOT NULL DEFAULT 0"],
       ["round", "ALTER TABLE rooms ADD COLUMN round INTEGER NOT NULL DEFAULT 1"],
     ] as const;
     for (const [column, sql] of migrations) {

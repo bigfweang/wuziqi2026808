@@ -1,9 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 import { BOARD_SIZE, CELL_COUNT, parseBoard, type Move, type Stone } from "../lib/gomoku";
 import { buildGameInvitation } from "../lib/invitation";
 import { describeGameOutcome, shouldApplyRoomResponse } from "../lib/web-game-state";
+import { PixelIcon } from "./pixel-icon";
 
 type Stats = { wins: number; losses: number; draws: number; total: number };
 type SelfUser = {
@@ -35,6 +43,7 @@ type RoomView = {
   winningLine: number[];
   round: number;
   revision: number;
+  undoRemaining: number;
   hasPassword: boolean;
   blackName: string;
   whiteName: string | null;
@@ -67,7 +76,7 @@ const AVATARS = [
   "09-face-mustache.png",
 ];
 const freshBoard = () => Array.from({ length: CELL_COUNT }, () => 0 as Stone);
-const avatarUrl = (avatarId: number) => `/avatars/${AVATARS[Math.max(1, Math.min(9, avatarId)) - 1]}`;
+const avatarUrl = (avatarId: number) => `/avatars/pixel-64/${AVATARS[Math.max(1, Math.min(9, avatarId)) - 1]}`;
 
 class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -127,7 +136,10 @@ export default function Home() {
   const [moves, setMoves] = useState<Move[]>([]);
   const [winner, setWinner] = useState<Stone>(0);
   const [line, setLine] = useState<number[]>([]);
-  const [hint, setHint] = useState<number | null>(null);
+  const [undoRemaining, setUndoRemaining] = useState(3);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [keyboardIndex, setKeyboardIndex] = useState(112);
+  const [boardSize, setBoardSize] = useState(330);
   const [roomId, setRoomId] = useState("");
   const [side, setSide] = useState<1 | 2>(1);
   const [roomStatus, setRoomStatus] = useState<RoomView["status"]>("waiting");
@@ -143,7 +155,6 @@ export default function Home() {
   const [invitePassword, setInvitePassword] = useState("");
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
-  const [rulesOpen, setRulesOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
   const [resignOpen, setResignOpen] = useState(false);
@@ -152,6 +163,8 @@ export default function Home() {
   const roomGeneration = useRef(0);
   const roomPollController = useRef<AbortController | null>(null);
   const roomPollInFlight = useRef(false);
+  const boardSlotRef = useRef<HTMLDivElement | null>(null);
+  const boardPointerActive = useRef(false);
 
   const last = moves.at(-1)?.index ?? -1;
   const selfSide: 1 | 2 = side;
@@ -165,6 +178,10 @@ export default function Home() {
   const selfPlayer = (side === 1 ? blackPlayer : whitePlayer) || fallbackSelf;
   const opponentPlayer = side === 1 ? whitePlayer : blackPlayer;
   const opponentName = opponentPlayer?.nickname || "等待好友";
+  const canUndo = roomStatus === "active"
+    && undoRemaining > 0
+    && moves.at(-1)?.stone === selfSide
+    && turn !== selfSide;
   const outcome = describeGameOutcome(roomStatus, winner, selfSide, opponentName);
   const turnText = roomStatus === "finished"
     ? winner === 0 ? "本局和棋" : `${winner === 1 ? "黑棋" : "白棋"}连成五子`
@@ -225,6 +242,19 @@ export default function Home() {
       roomPollController.current?.abort();
     };
   }, [user?.id, roomId]);
+
+  useEffect(() => {
+    const slot = boardSlotRef.current;
+    if (!roomId || !slot) return;
+    const updateBoardSize = () => {
+      const available = Math.max(210, slot.clientWidth - 24);
+      setBoardSize(Math.max(210, Math.min(630, Math.floor(available / 30) * 30)));
+    };
+    updateBoardSize();
+    const observer = new ResizeObserver(updateBoardSize);
+    observer.observe(slot);
+    return () => observer.disconnect();
+  }, [roomId]);
 
   async function hydrateProfile() {
     try {
@@ -349,13 +379,14 @@ export default function Home() {
     setTurn(room.turn);
     setWinner(room.winner);
     setLine(room.winningLine || []);
+    setUndoRemaining(room.undoRemaining);
     setRoomStatus(room.status);
     setRound(room.round);
     setRevision(room.revision);
     setRoomHasPassword(room.hasPassword);
     setBlackPlayer(room.blackPlayer);
     setWhitePlayer(room.whitePlayer);
-    setHint(null);
+    setPreviewIndex(null);
     if (room.status === "finished" && seenResult.current !== room.revision) {
       seenResult.current = room.revision;
       setResignOpen(false);
@@ -481,17 +512,63 @@ export default function Home() {
     void onlineAction("move", index);
   }
 
-  function getHint() {
-    if (roomStatus !== "active" || turn !== side) return setToast("等轮到你再看提示");
-    const empty = board.flatMap((stone, index) => stone ? [] : [index]);
-    const near = empty.filter((index) => !moves.length
-      ? index === 112
-      : moves.some((move) => Math.abs(Math.floor(index / BOARD_SIZE) - Math.floor(move.index / BOARD_SIZE)) <= 1
-        && Math.abs(index % BOARD_SIZE - move.index % BOARD_SIZE) <= 1));
-    const pool = near.length ? near : empty;
-    if (!pool.length) return;
-    setHint(pool[Math.floor(Math.random() * pool.length)]);
-    setToast("提示位置已标记");
+  function boardIndexFromPointer(event: PointerEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const cellWidth = rect.width / BOARD_SIZE;
+    const cellHeight = rect.height / BOARD_SIZE;
+    const col = Math.max(0, Math.min(BOARD_SIZE - 1, Math.floor((event.clientX - rect.left) / cellWidth)));
+    const row = Math.max(0, Math.min(BOARD_SIZE - 1, Math.floor((event.clientY - rect.top) / cellHeight)));
+    return row * BOARD_SIZE + col;
+  }
+
+  function handleBoardPointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    boardPointerActive.current = true;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setPreviewIndex(boardIndexFromPointer(event));
+  }
+
+  function handleBoardPointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (!boardPointerActive.current) return;
+    setPreviewIndex(boardIndexFromPointer(event));
+  }
+
+  function handleBoardPointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (!boardPointerActive.current) return;
+    const index = boardIndexFromPointer(event);
+    boardPointerActive.current = false;
+    setPreviewIndex(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    place(index);
+  }
+
+  function cancelBoardPointer() {
+    boardPointerActive.current = false;
+    setPreviewIndex(null);
+  }
+
+  function handleBoardKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const row = Math.floor(keyboardIndex / BOARD_SIZE);
+    const col = keyboardIndex % BOARD_SIZE;
+    const next = event.key === "ArrowUp"
+      ? Math.max(0, row - 1) * BOARD_SIZE + col
+      : event.key === "ArrowDown"
+        ? Math.min(BOARD_SIZE - 1, row + 1) * BOARD_SIZE + col
+        : event.key === "ArrowLeft"
+          ? row * BOARD_SIZE + Math.max(0, col - 1)
+          : event.key === "ArrowRight"
+            ? row * BOARD_SIZE + Math.min(BOARD_SIZE - 1, col + 1)
+            : keyboardIndex;
+    if (next !== keyboardIndex) {
+      event.preventDefault();
+      setKeyboardIndex(next);
+      setPreviewIndex(next);
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      place(keyboardIndex);
+    }
   }
 
   async function exitGame() {
@@ -505,6 +582,8 @@ export default function Home() {
     setMoves([]);
     setWinner(0);
     setLine([]);
+    setUndoRemaining(3);
+    setPreviewIndex(null);
     setResultOpen(false);
     setInviteOpen(false);
     await reloadProfile();
@@ -561,8 +640,7 @@ export default function Home() {
         <div className="ambient-grid" aria-hidden="true" />
         <section className="auth-hero">
           <span className="eyebrow">PIXEL GOMOKU · WEB</span>
-          <h1>把一盘棋，<br />留在朋友之间。</h1>
-          <p>独立网页版五子棋。微信里点开网址，注册后即可通过房间号和密码对战。</p>
+          <h1>五子连成线，<br />落子别眨眼。</h1>
           {joinCode && <div className="invitation-badge"><i /> 收到房间邀请 <b>{joinCode}</b></div>}
           <div className="hero-board" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /><i /><i /></div>
           <ul className="feature-list"><li>长期登录与在线状态</li><li>私密房间与续局</li><li>战绩持久保存</li></ul>
@@ -577,7 +655,7 @@ export default function Home() {
           <form onSubmit={submitAuth}>
             {authTab === "register" && <>
               <label>对外昵称<input value={nickname} onChange={(event) => setNickname(event.target.value)} maxLength={16} placeholder="朋友会看到这个名字" autoComplete="nickname" required /></label>
-              <fieldset><legend>选择头像</legend><div className="avatar-picker">{AVATARS.map((file, index) => <button type="button" className={avatarId === index + 1 ? "selected" : ""} key={file} onClick={() => setAvatarId(index + 1)} aria-label={`选择头像 ${index + 1}`}><img src={`/avatars/${file}`} alt="" /></button>)}</div></fieldset>
+              <fieldset><legend>选择头像</legend><div className="avatar-picker">{AVATARS.map((file, index) => <button type="button" className={avatarId === index + 1 ? "selected" : ""} key={file} onClick={() => setAvatarId(index + 1)} aria-label={`选择头像 ${index + 1}`}><img src={`/avatars/pixel-64/${file}`} alt="" /></button>)}</div></fieldset>
             </>}
             <label>登录账号<input value={account} onChange={(event) => setAccount(event.target.value)} minLength={3} maxLength={24} pattern="[A-Za-z0-9_]+" placeholder="字母、数字或下划线" autoCapitalize="none" autoComplete="username" required /></label>
             <label>密码<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} maxLength={64} placeholder="至少 8 个字符" autoComplete={authTab === "login" ? "current-password" : "new-password"} required /></label>
@@ -615,14 +693,14 @@ export default function Home() {
             {joinCode && <div className="received-invite"><span>邀请房间</span><b>{joinCode}</b><small>确认密码后即可加入</small></div>}
             <div className="room-actions-grid">
               <form className="room-form join-form" onSubmit={joinRoom}>
-                <div className="form-heading"><i>↘</i><div><b>加入房间</b><small>JOIN A ROOM</small></div></div>
+                <div className="form-heading"><i><PixelIcon name="join" /></i><div><b>加入房间</b><small>JOIN A ROOM</small></div></div>
                 <label>房间号<input className="code-input" value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase().replace(/[^2-9A-HJ-NP-Z]/g, "").slice(0, 6))} maxLength={6} placeholder="例如 ABC234" autoCapitalize="characters" required /></label>
                 <label>房间密码<input type="password" value={joinPassword} onChange={(event) => setJoinPassword(event.target.value)} maxLength={16} placeholder="无密码可留空" autoComplete="off" /></label>
                 <button className="primary-button" disabled={busy} type="submit">{busy ? "正在连接…" : "进入对战"}</button>
               </form>
 
               <div className="room-form create-form">
-                <div className="form-heading"><i>＋</i><div><b>创建房间</b><small>CREATE A ROOM</small></div></div>
+                <div className="form-heading"><i><PixelIcon name="plus" /></i><div><b>创建房间</b><small>CREATE A ROOM</small></div></div>
                 <label>设置房间密码（选填）<input type="password" value={createPassword} onChange={(event) => setCreatePassword(event.target.value)} minLength={createPassword ? 4 : undefined} maxLength={16} placeholder="4–16 位；留空即公开" autoComplete="new-password" /></label>
                 <p>创建后会生成网址、房间号与完整邀请文案。密码不会写入网址。</p>
                 <button className="secondary-button" disabled={busy} onClick={createRoom}>{busy ? "正在创建…" : "创建我的房间"}</button>
@@ -643,7 +721,7 @@ export default function Home() {
 
   return (
     <main className="game-shell">
-      <header className="game-header"><button onClick={() => void exitGame()}>← 大厅</button><div><b>房间 {roomId}</b><small>第 {round} 局 · {roomHasPassword ? "私密房间" : "公开房间"}</small></div><button onClick={() => setInviteOpen(true)}>分享邀请 ↗</button></header>
+      <header className="game-header"><button className="back-button" onClick={() => void exitGame()}><PixelIcon name="back" />大厅</button><div><b>房间 {roomId}</b><small>第 {round} 局 · {roomHasPassword ? "私密房间" : "公开房间"}</small></div><span className="game-side-chip">你执{selfSide === 1 ? "黑棋" : "白棋"}</span></header>
       <section className="game-layout">
         <aside className="player-stack">
           <article className={`game-player ${turn === opponentSide && !winner && roomStatus === "active" ? "active" : ""}`}>
@@ -660,23 +738,47 @@ export default function Home() {
 
         <section className="board-card">
           <div className="turn-banner"><i className={`disc ${turn === 1 ? "black" : "white"}`} /><b>{turnText}</b><small>{roomStatus === "waiting" ? "分享邀请开始对局" : roomStatus === "finished" ? `共 ${moves.length} 手` : `第 ${moves.length + 1} 手`}</small></div>
-          <div className="board-frame"><div className="board" role="grid" aria-label="十五乘十五五子棋棋盘">
-            {board.map((stone, index) => {
-              const row = Math.floor(index / BOARD_SIZE), col = index % BOARD_SIZE;
-              const cls = ["cell", row === 0 && "top", row === 14 && "bottom", col === 0 && "left", col === 14 && "right", index === last && "last", line.includes(index) && "win", busy && "locked"].filter(Boolean).join(" ");
-              return <button key={index} className={cls} role="gridcell" onClick={() => place(index)} aria-label={`${row + 1}行${col + 1}列${stone ? stone === 1 ? "黑棋" : "白棋" : "空位"}`}>{STARS.has(index) && !stone && <i className="star" />}{stone > 0 && <i className={`stone ${stone === 1 ? "stone-black" : "stone-white"}`} />}{hint === index && !stone && <i className="hint" />}</button>;
-            })}
-          </div></div>
-          <nav className="game-actions" aria-label="棋局操作"><button disabled={busy || roomStatus !== "active"} onClick={() => void onlineAction("undo")}><span>↶</span>悔一步</button><button disabled={busy || roomStatus !== "active"} onClick={getHint}><span>✦</span>提示</button><button onClick={() => setRulesOpen(true)}><span>?</span>规则</button>{roomStatus === "finished" ? <button disabled={busy} onClick={() => void onlineAction("reset")}><span>＋</span>再来一局</button> : <button disabled={busy || roomStatus !== "active"} onClick={() => setResignOpen(true)}><span>⚑</span>认输</button>}</nav>
-          {roomStatus === "waiting" && <button className="primary-button waiting-share" onClick={() => setInviteOpen(true)}>复制邀请，让好友加入</button>}
+          <div className="board-slot" ref={boardSlotRef}>
+            <div className="board-frame">
+              <div
+                aria-activedescendant={`intersection-${keyboardIndex}`}
+                aria-label="十五乘十五五子棋棋盘。拖动选择交点，松开落子；键盘方向键移动，回车落子。"
+                className={`board ${busy ? "locked" : ""}`}
+                onBlur={() => setPreviewIndex(null)}
+                onFocus={() => setPreviewIndex(keyboardIndex)}
+                onKeyDown={handleBoardKeyDown}
+                onPointerCancel={cancelBoardPointer}
+                onPointerDown={handleBoardPointerDown}
+                onPointerMove={handleBoardPointerMove}
+                onPointerUp={handleBoardPointerUp}
+                role="grid"
+                style={{ height: boardSize, width: boardSize }}
+                tabIndex={0}
+              >
+                {board.map((stone, index) => {
+                  const row = Math.floor(index / BOARD_SIZE), col = index % BOARD_SIZE;
+                  const cls = ["cell", row === 0 && "top", row === 14 && "bottom", col === 0 && "left", col === 14 && "right", index === last && "last", line.includes(index) && "win"].filter(Boolean).join(" ");
+                  return <span aria-label={`${row + 1}行${col + 1}列${stone ? stone === 1 ? "黑棋" : "白棋" : "空位"}`} aria-selected={previewIndex === index} className={cls} id={`intersection-${index}`} key={index} role="gridcell">{STARS.has(index) && !stone && <i className="star" />}{stone > 0 && <i className={`stone ${stone === 1 ? "stone-black" : "stone-white"}`} />}{previewIndex === index && !stone && <i className="pixel-cursor" />}</span>;
+                })}
+              </div>
+            </div>
+          </div>
+          <nav className={`game-actions ${roomStatus === "finished" ? "game-actions--finished" : ""}`} aria-label="棋局操作">
+            {roomStatus === "finished" ? (
+              <button disabled={busy} onClick={() => void onlineAction("reset")}><PixelIcon name="replay" /><span><b>再来一局</b><small>双方悔棋次数重置</small></span></button>
+            ) : <>
+              <button disabled={busy || !canUndo} onClick={() => void onlineAction("undo")}><PixelIcon name="undo" /><span><b>悔棋</b><small>本局剩余 {undoRemaining} 次</small></span></button>
+              <button className="resign-action" disabled={busy || roomStatus !== "active"} onClick={() => setResignOpen(true)}><PixelIcon name="resign" /><span><b>认输</b><small>立即结束本局</small></span></button>
+            </>}
+          </nav>
+          {roomStatus === "waiting" && <button className="primary-button waiting-share" onClick={() => setInviteOpen(true)}><PixelIcon name="invite" />复制邀请，让好友加入</button>}
         </section>
       </section>
 
       {toast && <div className="toast" role="status">{toast}</div>}
-      {inviteOpen && <div className="scrim"><section className="modal invite-modal" role="dialog" aria-modal="true"><button className="modal-close" onClick={() => setInviteOpen(false)}>×</button><span className="eyebrow">ROOM INVITATION</span><h2>邀请好友来对战</h2><p>微信或浏览器均可打开。对方需要先登录或注册，再输入房间信息。</p><div className="invite-details"><label>网址<code>{currentInvitation().url}</code></label><label>房间号<strong>{roomId}</strong></label>{roomHasPassword ? <label>房间密码<input type="text" value={invitePassword} onChange={(event) => setInvitePassword(event.target.value)} maxLength={16} placeholder="重新填写房间密码" /></label> : <label>房间密码<strong>无密码</strong></label>}</div><label className="manual-invitation">完整邀请（复制不可用时可长按全选）<textarea readOnly value={currentInvitation().text} onFocus={(event) => event.currentTarget.select()} /></label><button className="primary-button" onClick={copyInvitation}>复制完整邀请</button><button className="text-button" onClick={systemShare}>调用系统分享</button><small>安全提示：密码只进入复制内容，不写入网址。</small></section></div>}
-      {rulesOpen && <div className="scrim"><section className="modal rules-modal" role="dialog" aria-modal="true"><button className="modal-close" onClick={() => setRulesOpen(false)}>×</button><span className="eyebrow">HOW TO PLAY</span><h2>五子棋规则</h2><ol><li><b>01</b><span>黑棋先手，双方轮流在交叉点落子。</span></li><li><b>02</b><span>横、竖或斜线率先连成五子获胜。</span></li><li><b>03</b><span>本游戏为好友休闲局，当前不设置禁手。</span></li></ol><button className="primary-button" onClick={() => setRulesOpen(false)}>知道了</button></section></div>}
-      {resignOpen && <div className="scrim"><section className="modal resign-modal" role="alertdialog" aria-modal="true"><span className="result-crown">⚑</span><span className="eyebrow">CONFIRM RESIGN</span><h2>确认认输？</h2><p>认输会立即结束本局，并在战绩中记录一次负场。</p><button className="danger-button" disabled={busy} onClick={() => { setResignOpen(false); void onlineAction("resign"); }}>确认认输</button><button className="text-button" disabled={busy} onClick={() => setResignOpen(false)}>继续下棋</button></section></div>}
-      {resultOpen && outcome && <div className="scrim"><section className="modal result-modal" role="dialog" aria-modal="true"><span className="result-crown">{outcome.isDraw ? "＝" : "♛"}</span><span className="eyebrow">GOOD GAME</span><h2>{outcome.title}</h2><p>{outcome.detail}</p><button className="primary-button" disabled={busy} onClick={() => { setResultOpen(false); void onlineAction("reset"); }}>再来一局</button><button className="text-button" onClick={() => setResultOpen(false)}>回看棋盘</button></section></div>}
+      {inviteOpen && <div className="scrim"><section className="modal invite-modal" role="dialog" aria-modal="true"><button className="modal-close" aria-label="关闭邀请" onClick={() => setInviteOpen(false)}><PixelIcon name="close" /></button><span className="eyebrow">ROOM INVITATION</span><h2>邀请好友来对战</h2><p>微信或浏览器均可打开。对方需要先登录或注册，再输入房间信息。</p><div className="invite-details"><label>网址<code>{currentInvitation().url}</code></label><label>房间号<strong>{roomId}</strong></label>{roomHasPassword ? <label>房间密码<input type="text" value={invitePassword} onChange={(event) => setInvitePassword(event.target.value)} maxLength={16} placeholder="重新填写房间密码" /></label> : <label>房间密码<strong>无密码</strong></label>}</div><label className="manual-invitation">完整邀请（复制不可用时可长按全选）<textarea readOnly value={currentInvitation().text} onFocus={(event) => event.currentTarget.select()} /></label><button className="primary-button" onClick={copyInvitation}><PixelIcon name="copy" />复制完整邀请</button><button className="text-button share-text-button" onClick={systemShare}><PixelIcon name="invite" />调用系统分享</button><small>安全提示：密码只进入复制内容，不写入网址。</small></section></div>}
+      {resignOpen && <div className="scrim"><section className="modal resign-modal" role="alertdialog" aria-modal="true"><span className="result-crown"><PixelIcon name="resign" size={32} /></span><span className="eyebrow">CONFIRM RESIGN</span><h2>确认认输？</h2><p>认输会立即结束本局，并在战绩中记录一次负场。</p><button className="danger-button" disabled={busy} onClick={() => { setResignOpen(false); void onlineAction("resign"); }}><PixelIcon name="resign" />确认认输</button><button className="text-button" disabled={busy} onClick={() => setResignOpen(false)}>继续下棋</button></section></div>}
+      {resultOpen && outcome && <div className="scrim"><section className="modal result-modal" role="dialog" aria-modal="true"><span className="result-crown"><PixelIcon name={outcome.isDraw ? "draw" : "crown"} size={32} /></span><span className="eyebrow">GOOD GAME</span><h2>{outcome.title}</h2><p>{outcome.detail}</p><button className="primary-button" disabled={busy} onClick={() => { setResultOpen(false); void onlineAction("reset"); }}><PixelIcon name="replay" />再来一局</button><button className="text-button" onClick={() => setResultOpen(false)}>回看棋盘</button></section></div>}
     </main>
   );
 }

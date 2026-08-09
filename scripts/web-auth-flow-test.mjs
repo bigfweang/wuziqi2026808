@@ -484,6 +484,7 @@ try {
   const db = new DatabaseSync(databasePath);
   const schemaVersion = db.prepare("PRAGMA user_version").get();
   const columns = db.prepare("PRAGMA table_info(users)").all().map((column) => column.name);
+  const roomColumns = db.prepare("PRAGMA table_info(rooms)").all().map((column) => column.name);
   const account = db.prepare(`
     SELECT provider, provider_user_id, password_salt, password_hash
     FROM users WHERE provider = 'local' AND provider_user_id = 'black_player'
@@ -491,9 +492,11 @@ try {
   const integrity = db.prepare("PRAGMA integrity_check").get();
   const foreignKeyErrors = db.prepare("PRAGMA foreign_key_check").all();
   const storedSessionTokens = db.prepare("SELECT token FROM sessions").all().map((row) => row.token);
-  assert.equal(schemaVersion.user_version, 4);
+  assert.equal(schemaVersion.user_version, 5);
   assert.ok(columns.includes("password_salt"));
   assert.ok(columns.includes("password_hash"));
+  assert.ok(roomColumns.includes("black_undos_used"));
+  assert.ok(roomColumns.includes("white_undos_used"));
   assert.equal(account.provider, "local");
   assert.ok(account.password_salt);
   assert.ok(account.password_hash);

@@ -177,9 +177,12 @@ try {
   db.prepare("UPDATE gameserver_rooms SET expires_at = ? WHERE room_id = ?")
     .run(new Date(Date.now() - 1000).toISOString(), created.room.id);
   const schemaVersion = db.prepare("PRAGMA user_version").get();
+  const roomColumns = db.prepare("PRAGMA table_info(rooms)").all().map((column) => column.name);
   const integrity = db.prepare("PRAGMA integrity_check").get();
   const foreignKeyErrors = db.prepare("PRAGMA foreign_key_check").all();
-  assert.equal(schemaVersion.user_version, 4);
+  assert.equal(schemaVersion.user_version, 5);
+  assert.ok(roomColumns.includes("black_undos_used"));
+  assert.ok(roomColumns.includes("white_undos_used"));
   assert.equal(integrity.integrity_check, "ok");
   assert.deepEqual(foreignKeyErrors, []);
   db.close();

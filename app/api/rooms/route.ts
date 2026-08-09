@@ -3,7 +3,7 @@ import { EMPTY_BOARD, findWinningLine, parseBoard, type Move } from "../../../li
 import { createRoomPassword, RoomPasswordError, verifyRoomPassword } from "../../../lib/room-password";
 import { consumeRequestLimit, type RateLimitResult } from "../../../lib/request-rate-limit";
 import { mutationOriginError } from "../../../lib/request-security";
-import { applyRoomCommand, resolveRoomSide, RoomCommandError } from "../../../lib/room-service";
+import { applyRoomCommand, resolveRoomSide, RoomCommandError, UNDO_LIMIT_PER_ROUND } from "../../../lib/room-service";
 import { authenticateRequest, playerView } from "../../../lib/users";
 
 export const runtime = "nodejs";
@@ -41,6 +41,10 @@ function view(room: RoomRow, token: string, userId?: string) {
     winningLine,
     round: room.round,
     revision: room.revision,
+    undoRemaining: Math.max(
+      0,
+      UNDO_LIMIT_PER_ROUND - (side === 1 ? room.black_undos_used : room.white_undos_used),
+    ),
     hasPassword: Boolean(room.password_hash),
     blackName: room.black_name,
     whiteName: room.white_name,

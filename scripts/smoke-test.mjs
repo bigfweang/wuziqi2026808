@@ -101,16 +101,47 @@ try {
     body: JSON.stringify({ action: actionName, id: created.room.id, token: roomToken, index }),
   }, sessionToken);
 
+  const rawAction = (sessionToken, roomToken, actionName, index) => fetch(`${origin}/api/rooms`, {
+    method: "PATCH",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${sessionToken}`,
+    },
+    body: JSON.stringify({ action: actionName, id: created.room.id, token: roomToken, index }),
+  });
+
+  assert.equal(created.room.undoRemaining, 3);
+  assert.equal(joined.room.undoRemaining, 3);
+
   await action(blackSession.token, created.token, "move", 112);
   const afterWhiteMove = await action(whiteSession.token, joined.token, "move", 113);
   assert.equal(afterWhiteMove.room.moves.length, 2);
   const afterUndo = await action(whiteSession.token, joined.token, "undo");
   assert.equal(afterUndo.room.moves.length, 1);
+  assert.equal(afterUndo.room.undoRemaining, 2);
+  await action(whiteSession.token, joined.token, "move", 113);
+  const secondUndo = await action(whiteSession.token, joined.token, "undo");
+  assert.equal(secondUndo.room.undoRemaining, 1);
+  await action(whiteSession.token, joined.token, "move", 114);
+  const thirdUndo = await action(whiteSession.token, joined.token, "undo");
+  assert.equal(thirdUndo.room.undoRemaining, 0);
+  await action(whiteSession.token, joined.token, "move", 115);
+  const fourthUndo = await rawAction(whiteSession.token, joined.token, "undo");
+  assert.equal(fourthUndo.status, 409);
+  assert.match((await fourthUndo.json()).error, /悔棋次数已用完/);
   const afterResign = await action(whiteSession.token, joined.token, "resign");
   assert.equal(afterResign.room.winner, 1);
   const afterReset = await action(blackSession.token, created.token, "reset");
   assert.equal(afterReset.room.moves.length, 0);
   assert.equal(afterReset.room.status, "active");
+  assert.equal(afterReset.room.undoRemaining, 3);
+
+  const whiteAfterReset = await request(
+    `/api/rooms?id=${created.room.id}&token=${encodeURIComponent(joined.token)}`,
+    {},
+    whiteSession.token,
+  );
+  assert.equal(whiteAfterReset.room.undoRemaining, 3);
 
   const blackView = await request(
     `/api/rooms?id=${created.room.id}&token=${encodeURIComponent(created.token)}`,

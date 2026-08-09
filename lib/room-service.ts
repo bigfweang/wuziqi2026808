@@ -8,6 +8,8 @@ import {
 import { EMPTY_BOARD, findWinningLine, parseBoard, serializeBoard, type Move } from "./gomoku";
 import { recordFinishedMatch } from "./users";
 
+export const UNDO_LIMIT_PER_ROUND = 3;
+
 export class RoomCommandError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
@@ -89,6 +91,10 @@ export function applyRoomCommand(input: {
       if (!last || last.stone !== side || current.turn === side) {
         throw new RoomCommandError("只能撤回自己刚走的那一步", 409);
       }
+      const undosUsed = side === 1 ? current.black_undos_used : current.white_undos_used;
+      if (undosUsed >= UNDO_LIMIT_PER_ROUND) {
+        throw new RoomCommandError("本局悔棋次数已用完", 409);
+      }
       const board = parseBoard(current.board);
       board[last.index] = 0;
       moves.pop();
@@ -98,6 +104,9 @@ export function applyRoomCommand(input: {
         turn: side,
         status: "active",
         winner: 0,
+        ...(side === 1
+          ? { blackUndosUsed: undosUsed + 1 }
+          : { whiteUndosUsed: undosUsed + 1 }),
       };
     } else if (input.action === "resign") {
       if (current.status !== "active") throw new RoomCommandError("现在不能认输", 409);
@@ -113,6 +122,8 @@ export function applyRoomCommand(input: {
         turn: 1,
         status: current.white_token ? "active" : "waiting",
         winner: 0,
+        blackUndosUsed: 0,
+        whiteUndosUsed: 0,
         round: current.round + 1,
       };
     } else {

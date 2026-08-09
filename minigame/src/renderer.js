@@ -59,13 +59,16 @@ class Renderer {
 
   fillPixelCard(x, y, width, height, fill = COLORS.white, border = "#c8cfbd", shadow = 3) {
     const ctx = this.ctx;
+    x = Math.round(x); y = Math.round(y); width = Math.round(width); height = Math.round(height);
     ctx.fillStyle = "rgba(36,49,43,.17)";
     ctx.fillRect(x + shadow, y + shadow, width, height);
     ctx.fillStyle = fill;
     ctx.fillRect(x, y, width, height);
-    ctx.strokeStyle = border;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+    ctx.fillStyle = border;
+    ctx.fillRect(x, y, width, 2);
+    ctx.fillRect(x, y + height - 2, width, 2);
+    ctx.fillRect(x, y + 2, 2, height - 4);
+    ctx.fillRect(x + width - 2, y + 2, 2, height - 4);
   }
 
   text(value, x, y, size, color = COLORS.ink, align = "left", weight = 500) {
@@ -112,13 +115,12 @@ class Renderer {
     const ctx = this.ctx;
     ctx.fillStyle = "#dfe8cd";
     ctx.fillRect(0, 0, this.width, this.height);
-    ctx.strokeStyle = "rgba(56,110,85,.08)";
-    ctx.lineWidth = 1;
+    ctx.fillStyle = "#cbd8b7";
     for (let x = 0; x <= this.width; x += 16) {
-      ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, this.height); ctx.stroke();
+      ctx.fillRect(x, 0, 2, this.height);
     }
     for (let y = 0; y <= this.height; y += 16) {
-      ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(this.width, y + 0.5); ctx.stroke();
+      ctx.fillRect(0, y, this.width, 2);
     }
     const appX = Math.max(0, (this.width - 440) / 2);
     const appWidth = Math.min(this.width, 440);
@@ -130,19 +132,18 @@ class Renderer {
     }
   }
 
-  header(title, subtitle, showBack, share) {
+  header(title, subtitle, showBack) {
     const x = Math.max(16, (this.width - 408) / 2);
     if (showBack) {
-      this.text("‹", x + 10, 32, 32, COLORS.ink, "center", 400);
-      this.hit("back", x - 4, 8, 44, 48);
+      this.ctx.fillStyle = COLORS.ink;
+      [[0, 6, 12, 4], [0, 4, 4, 8], [4, 2, 4, 4], [4, 10, 4, 4]].forEach(([px, py, width, height]) => {
+        this.ctx.fillRect(Math.round(x + 2 + px), Math.round(22 + py), width, height);
+      });
+      this.hit("back", x - 8, 7, 52, 43);
     }
     this.text(title, this.width / 2, 25, 17, COLORS.ink, "center", 800);
     this.text(subtitle, this.width / 2, 44, 8, COLORS.muted, "center", 700);
-    if (share) {
-      this.fillPixelCard(this.width - x - 45, 13, 45, 31, "rgba(255,255,255,.8)", "#bfc6ba", 1);
-      this.text("分享", this.width - x - 22, 29, 10, COLORS.green, "center", 800);
-      this.hit("share", this.width - x - 50, 7, 54, 43);
-    }
+
   }
 
   render(state) {
@@ -157,7 +158,7 @@ class Renderer {
   }
 
   renderLoading(state) {
-    this.header("像素五子棋", "PIXEL GOMOKU · DEV", false, false);
+    this.header("像素五子棋", "PIXEL GOMOKU · DEV", false);
     const cx = this.width / 2;
     const cy = this.height * 0.43;
     this.ctx.fillStyle = COLORS.green;
@@ -166,7 +167,7 @@ class Renderer {
   }
 
   renderHome(state) {
-    this.header("像素五子棋", "PIXEL GOMOKU · 开发版", false, false);
+    this.header("像素五子棋", "PIXEL GOMOKU · 开发版", false);
     const margin = Math.max(18, (this.width - 404) / 2);
     const width = this.width - margin * 2;
     const user = state.user || { nickname: "开发棋手", avatarId: 1, stats: {} };
@@ -195,7 +196,7 @@ class Renderer {
       this.button("resume", `继续房间 ${state.activeRoom.id}`, margin, buttonY, width, 48, true);
       buttonY += 60;
     }
-    this.button("create", "＋ 创建棋局并邀请好友", margin, buttonY, width, 48, true);
+    this.button("create", "创建棋局并邀请好友", margin, buttonY, width, 48, true);
     buttonY += 60;
     this.button("join", "输入房间码加入", margin, buttonY, width, 44, false);
 
@@ -284,7 +285,7 @@ class Renderer {
 
   renderGame(state) {
     const room = state.room;
-    this.header("像素五子棋", room ? `房间 ${room.id}` : "正在进入房间", true, Boolean(room));
+    this.header("像素五子棋", room ? `房间 ${room.id}` : "正在进入房间", true);
     if (!room) return;
     const margin = Math.max(14, (this.width - 412) / 2);
     const width = this.width - margin * 2;
@@ -315,11 +316,22 @@ class Renderer {
     this.playerCard(self, selfSide, margin, selfY, width, room.status === "active" && room.turn === selfSide);
     const actionY = selfY + 74;
     const actionWidth = (width - 8) / 2;
-    this.button("undo", "悔一步", margin, actionY, actionWidth, 40, false, state.busy || room.status !== "active" || !room.moves.length);
+    const undoRemaining = Number.isInteger(room.undoRemaining) ? room.undoRemaining : 3;
+    const lastMove = room.moves[room.moves.length - 1];
+    const canUndo = room.status === "active" && undoRemaining > 0 && lastMove && lastMove.stone === selfSide;
+    this.button("undo", `悔棋 · 剩${undoRemaining}次`, margin, actionY, actionWidth, 40, false, state.busy || !canUndo);
     this.button("resign", "认输", margin + actionWidth + 8, actionY, actionWidth, 40, false, state.busy || room.status !== "active");
     const inviteY = actionY + 51;
-    this.button("share", room.status === "waiting" ? "可选：发给微信好友" : "↗ 分享这局棋", margin, inviteY, width, 45, room.status !== "waiting", state.busy);
-    this.text(`你执${selfSide === 1 ? "黑" : "白"} · 第 ${room.moves.length + (room.status === "finished" ? 0 : 1)} 手`, this.width / 2, inviteY + 60, 8, COLORS.muted, "center", 600);
+    if (room.status === "waiting") this.button("share", "邀请好友加入", margin, inviteY, width, 45, true, state.busy);
+    this.text(
+      `你执${selfSide === 1 ? "黑" : "白"} · 第 ${room.moves.length + (room.status === "finished" ? 0 : 1)} 手`,
+      this.width / 2,
+      inviteY + (room.status === "waiting" ? 60 : 16),
+      8,
+      COLORS.muted,
+      "center",
+      600,
+    );
 
     if (room.status === "finished") this.renderResult(state, selfSide);
   }

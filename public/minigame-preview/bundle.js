@@ -379,13 +379,19 @@
         }
         fillPixelCard(x, y, width, height, fill = COLORS.white, border = "#c8cfbd", shadow = 3) {
           const ctx = this.ctx;
+          x = Math.round(x);
+          y = Math.round(y);
+          width = Math.round(width);
+          height = Math.round(height);
           ctx.fillStyle = "rgba(36,49,43,.17)";
           ctx.fillRect(x + shadow, y + shadow, width, height);
           ctx.fillStyle = fill;
           ctx.fillRect(x, y, width, height);
-          ctx.strokeStyle = border;
-          ctx.lineWidth = 1;
-          ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+          ctx.fillStyle = border;
+          ctx.fillRect(x, y, width, 2);
+          ctx.fillRect(x, y + height - 2, width, 2);
+          ctx.fillRect(x, y + 2, 2, height - 4);
+          ctx.fillRect(x + width - 2, y + 2, 2, height - 4);
         }
         text(value, x, y, size, color = COLORS.ink, align = "left", weight = 500) {
           const ctx = this.ctx;
@@ -431,19 +437,12 @@
           const ctx = this.ctx;
           ctx.fillStyle = "#dfe8cd";
           ctx.fillRect(0, 0, this.width, this.height);
-          ctx.strokeStyle = "rgba(56,110,85,.08)";
-          ctx.lineWidth = 1;
+          ctx.fillStyle = "#cbd8b7";
           for (let x = 0; x <= this.width; x += 16) {
-            ctx.beginPath();
-            ctx.moveTo(x + 0.5, 0);
-            ctx.lineTo(x + 0.5, this.height);
-            ctx.stroke();
+            ctx.fillRect(x, 0, 2, this.height);
           }
           for (let y = 0; y <= this.height; y += 16) {
-            ctx.beginPath();
-            ctx.moveTo(0, y + 0.5);
-            ctx.lineTo(this.width, y + 0.5);
-            ctx.stroke();
+            ctx.fillRect(0, y, this.width, 2);
           }
           const appX = Math.max(0, (this.width - 440) / 2);
           const appWidth = Math.min(this.width, 440);
@@ -454,19 +453,17 @@
             for (let x = appX + 18; x < appX + appWidth; x += 29) ctx.fillRect(x, y, 2, 2);
           }
         }
-        header(title, subtitle, showBack, share) {
+        header(title, subtitle, showBack) {
           const x = Math.max(16, (this.width - 408) / 2);
           if (showBack) {
-            this.text("\u2039", x + 10, 32, 32, COLORS.ink, "center", 400);
-            this.hit("back", x - 4, 8, 44, 48);
+            this.ctx.fillStyle = COLORS.ink;
+            [[0, 6, 12, 4], [0, 4, 4, 8], [4, 2, 4, 4], [4, 10, 4, 4]].forEach(([px, py, width, height]) => {
+              this.ctx.fillRect(Math.round(x + 2 + px), Math.round(22 + py), width, height);
+            });
+            this.hit("back", x - 8, 7, 52, 43);
           }
           this.text(title, this.width / 2, 25, 17, COLORS.ink, "center", 800);
           this.text(subtitle, this.width / 2, 44, 8, COLORS.muted, "center", 700);
-          if (share) {
-            this.fillPixelCard(this.width - x - 45, 13, 45, 31, "rgba(255,255,255,.8)", "#bfc6ba", 1);
-            this.text("\u5206\u4EAB", this.width - x - 22, 29, 10, COLORS.green, "center", 800);
-            this.hit("share", this.width - x - 50, 7, 54, 43);
-          }
         }
         render(state) {
           this.layout = { hits: [], board: null };
@@ -479,7 +476,7 @@
           return this.layout;
         }
         renderLoading(state) {
-          this.header("\u50CF\u7D20\u4E94\u5B50\u68CB", "PIXEL GOMOKU \xB7 DEV", false, false);
+          this.header("\u50CF\u7D20\u4E94\u5B50\u68CB", "PIXEL GOMOKU \xB7 DEV", false);
           const cx = this.width / 2;
           const cy = this.height * 0.43;
           this.ctx.fillStyle = COLORS.green;
@@ -487,7 +484,7 @@
           this.text(state.loadingText || "\u6B63\u5728\u51C6\u5907\u5F00\u53D1\u8EAB\u4EFD\u2026", cx, cy + 38, 12, COLORS.muted, "center", 600);
         }
         renderHome(state) {
-          this.header("\u50CF\u7D20\u4E94\u5B50\u68CB", "PIXEL GOMOKU \xB7 \u5F00\u53D1\u7248", false, false);
+          this.header("\u50CF\u7D20\u4E94\u5B50\u68CB", "PIXEL GOMOKU \xB7 \u5F00\u53D1\u7248", false);
           const margin = Math.max(18, (this.width - 404) / 2);
           const width = this.width - margin * 2;
           const user = state.user || { nickname: "\u5F00\u53D1\u68CB\u624B", avatarId: 1, stats: {} };
@@ -513,7 +510,7 @@
             this.button("resume", `\u7EE7\u7EED\u623F\u95F4 ${state.activeRoom.id}`, margin, buttonY, width, 48, true);
             buttonY += 60;
           }
-          this.button("create", "\uFF0B \u521B\u5EFA\u68CB\u5C40\u5E76\u9080\u8BF7\u597D\u53CB", margin, buttonY, width, 48, true);
+          this.button("create", "\u521B\u5EFA\u68CB\u5C40\u5E76\u9080\u8BF7\u597D\u53CB", margin, buttonY, width, 48, true);
           buttonY += 60;
           this.button("join", "\u8F93\u5165\u623F\u95F4\u7801\u52A0\u5165", margin, buttonY, width, 44, false);
           const historyY = buttonY + 68;
@@ -606,7 +603,7 @@
         }
         renderGame(state) {
           const room = state.room;
-          this.header("\u50CF\u7D20\u4E94\u5B50\u68CB", room ? `\u623F\u95F4 ${room.id}` : "\u6B63\u5728\u8FDB\u5165\u623F\u95F4", true, Boolean(room));
+          this.header("\u50CF\u7D20\u4E94\u5B50\u68CB", room ? `\u623F\u95F4 ${room.id}` : "\u6B63\u5728\u8FDB\u5165\u623F\u95F4", true);
           if (!room) return;
           const margin = Math.max(14, (this.width - 412) / 2);
           const width = this.width - margin * 2;
@@ -634,11 +631,22 @@
           this.playerCard(self, selfSide, margin, selfY, width, room.status === "active" && room.turn === selfSide);
           const actionY = selfY + 74;
           const actionWidth = (width - 8) / 2;
-          this.button("undo", "\u6094\u4E00\u6B65", margin, actionY, actionWidth, 40, false, state.busy || room.status !== "active" || !room.moves.length);
+          const undoRemaining = Number.isInteger(room.undoRemaining) ? room.undoRemaining : 3;
+          const lastMove = room.moves[room.moves.length - 1];
+          const canUndo = room.status === "active" && undoRemaining > 0 && lastMove && lastMove.stone === selfSide;
+          this.button("undo", `\u6094\u68CB \xB7 \u5269${undoRemaining}\u6B21`, margin, actionY, actionWidth, 40, false, state.busy || !canUndo);
           this.button("resign", "\u8BA4\u8F93", margin + actionWidth + 8, actionY, actionWidth, 40, false, state.busy || room.status !== "active");
           const inviteY = actionY + 51;
-          this.button("share", room.status === "waiting" ? "\u53EF\u9009\uFF1A\u53D1\u7ED9\u5FAE\u4FE1\u597D\u53CB" : "\u2197 \u5206\u4EAB\u8FD9\u5C40\u68CB", margin, inviteY, width, 45, room.status !== "waiting", state.busy);
-          this.text(`\u4F60\u6267${selfSide === 1 ? "\u9ED1" : "\u767D"} \xB7 \u7B2C ${room.moves.length + (room.status === "finished" ? 0 : 1)} \u624B`, this.width / 2, inviteY + 60, 8, COLORS.muted, "center", 600);
+          if (room.status === "waiting") this.button("share", "\u9080\u8BF7\u597D\u53CB\u52A0\u5165", margin, inviteY, width, 45, true, state.busy);
+          this.text(
+            `\u4F60\u6267${selfSide === 1 ? "\u9ED1" : "\u767D"} \xB7 \u7B2C ${room.moves.length + (room.status === "finished" ? 0 : 1)} \u624B`,
+            this.width / 2,
+            inviteY + (room.status === "waiting" ? 60 : 16),
+            8,
+            COLORS.muted,
+            "center",
+            600
+          );
           if (room.status === "finished") this.renderResult(state, selfSide);
         }
         renderResult(state, selfSide) {

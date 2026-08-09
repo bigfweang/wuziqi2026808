@@ -240,13 +240,16 @@ try {
   ).get(created.room.id);
   const schemaVersion = roundDb.prepare("PRAGMA user_version").get();
   const userColumns = roundDb.prepare("PRAGMA table_info(users)").all().map((column) => column.name);
+  const roomColumns = roundDb.prepare("PRAGMA table_info(rooms)").all().map((column) => column.name);
   const integrity = roundDb.prepare("PRAGMA integrity_check").get();
   const foreignKeyErrors = roundDb.prepare("PRAGMA foreign_key_check").all();
   assert.equal(settledRound.round, 1);
   assert.equal(currentRound.round, 2);
-  assert.equal(schemaVersion.user_version, 4);
+  assert.equal(schemaVersion.user_version, 5);
   assert.ok(userColumns.includes("password_salt"));
   assert.ok(userColumns.includes("password_hash"));
+  assert.ok(roomColumns.includes("black_undos_used"));
+  assert.ok(roomColumns.includes("white_undos_used"));
   assert.equal(integrity.integrity_check, "ok");
   assert.deepEqual(foreignKeyErrors, []);
   roundDb.close();

@@ -1,13 +1,24 @@
 # 像素五子棋｜自托管版
 
-这是之前那套像素风五子棋的服务器部署版，保留了：
+这是可独立部署、长期保存账号与棋局数据的网页五子棋：
 
-- 15×15 像素棋盘与手机端界面
-- 本机双人对局
+- 15×15 响应式像素棋盘与手机端最近交点吸附
+- 注册账号、像素头像、战绩、历史与续局
 - 创建联机房间与六位房间码
 - 分享邀请链接、双方自动同步落子
-- 悔一步、提示、认输、再来一局
+- 对局操作只保留悔棋与认输；双方每局各有 3 次悔棋机会
+- 终局后可再来一局，悔棋次数随新一局重置
 - SQLite 本地持久化，重启服务器不会丢失房间数据
+
+## Pixel-First Rendering
+
+本项目采用 Pixel-First Rendering。任何新增 UI、Sprite、动画或特效，必须优先保证 Pixel Grid、Nearest Sampling、Integer Position、Limited Palette 和 Touch Usability。任何为了“现代感”而引入的 Blur、Fractional Scale、Smooth Gradient、Subpixel Motion，都需要经过设计审核。
+
+- UI 使用 4px 基础网格、硬边框、硬阴影与离散 `steps()` 动画。
+- 棋盘是单一触控面，不创建 225 个小按钮；指针松开时吸附到最近交点。
+- Web 头像使用 64×64 原生低分辨率 PNG，只以 32px 或 64px 显示。
+- 中文 UI 自托管 Ark Pixel Font 12px 简体中文比例字体；来源和 OFL-1.1 许可证见 `public/fonts/ARK-PIXEL-FONT-LICENSE.txt`。
+- 棋子使用 16×16 原生像素 PNG，并通过 `image-rendering: pixelated` 以整数倍显示。
 
 ## 微信小游戏开发版（无需 AppID）
 
