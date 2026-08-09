@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildGameInvitation } from "../lib/invitation.ts";
+import { describeGameOutcome, shouldApplyRoomResponse } from "../lib/web-game-state.ts";
 
 const invitation = buildGameInvitation({
   baseUrl: "https://game.lmbostudio.cn/old?debug=1#fragment",
@@ -18,6 +19,47 @@ assert.match(invitation.text, /网址：https:\/\/game\.lmbostudio\.cn\/old\?roo
 assert.match(invitation.text, /房间号：ABC234/);
 assert.match(invitation.text, /房间密码：2468/);
 assert.equal(invitation.url.includes("2468"), false);
+
+assert.deepEqual(describeGameOutcome("finished", 0, 1, "好友"), {
+  title: "本局和棋",
+  detail: "棋盘已经落满，双方平分秋色。",
+  isDraw: true,
+});
+assert.equal(describeGameOutcome("active", 0, 1, "好友"), null);
+assert.equal(describeGameOutcome("finished", 1, 1, "好友")?.title, "你赢了");
+assert.equal(describeGameOutcome("finished", 2, 1, "好友")?.title, "好友赢了");
+assert.equal(shouldApplyRoomResponse({
+  expectedGeneration: 4,
+  currentGeneration: 5,
+  currentRoomId: "",
+  responseRoomId: "ROOMA1",
+  currentRevision: -1,
+  responseRevision: 9,
+}), false);
+assert.equal(shouldApplyRoomResponse({
+  expectedGeneration: 5,
+  currentGeneration: 5,
+  currentRoomId: "ROOMA1",
+  responseRoomId: "ROOMA1",
+  currentRevision: 10,
+  responseRevision: 9,
+}), false);
+assert.equal(shouldApplyRoomResponse({
+  expectedGeneration: 5,
+  currentGeneration: 5,
+  currentRoomId: "ROOMA1",
+  responseRoomId: "ROOMB2",
+  currentRevision: 10,
+  responseRevision: 1,
+}), false);
+assert.equal(shouldApplyRoomResponse({
+  expectedGeneration: 5,
+  currentGeneration: 5,
+  currentRoomId: "ROOMA1",
+  responseRoomId: "ROOMA1",
+  currentRevision: 10,
+  responseRevision: 11,
+}), true);
 
 const port = "3473";
 const origin = `http://127.0.0.1:${port}`;

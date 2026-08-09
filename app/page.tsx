@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { BOARD_SIZE, CELL_COUNT, parseBoard, type Move, type Stone } from "../lib/gomoku";
 import { buildGameInvitation } from "../lib/invitation";
+import { describeGameOutcome, shouldApplyRoomResponse } from "../lib/web-game-state";
 
 type Stats = { wins: number; losses: number; draws: number; total: number };
 type SelfUser = {
@@ -85,17 +86,24 @@ async function readResponse<T>(response: Response) {
 
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {}
   }
   const input = document.createElement("textarea");
   input.value = text;
   input.style.position = "fixed";
   input.style.opacity = "0";
   document.body.appendChild(input);
-  input.select();
-  document.execCommand("copy");
-  input.remove();
+  let copied = false;
+  try {
+    input.select();
+    copied = document.execCommand("copy");
+  } finally {
+    input.remove();
+  }
+  if (!copied) throw new Error("浏览器未允许复制");
 }
 
 function PixelAvatar({ avatarId, name, size = "normal" }: { avatarId: number; name: string; size?: "small" | "normal" | "large" }) {
@@ -138,8 +146,12 @@ export default function Home() {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
+  const [resignOpen, setResignOpen] = useState(false);
   const seenResult = useRef(-1);
   const latestRoom = useRef({ id: "", revision: -1 });
+  const roomGeneration = useRef(0);
+  const roomPollController = useRef<AbortController | null>(null);
+  const roomPollInFlight = useRef(false);
 
   const last = moves.at(-1)?.index ?? -1;
   const selfSide: 1 | 2 = side;
@@ -153,11 +165,12 @@ export default function Home() {
   const selfPlayer = (side === 1 ? blackPlayer : whitePlayer) || fallbackSelf;
   const opponentPlayer = side === 1 ? whitePlayer : blackPlayer;
   const opponentName = opponentPlayer?.nickname || "等待好友";
-  const turnText = roomStatus === "waiting"
+  const outcome = describeGameOutcome(roomStatus, winner, selfSide, opponentName);
+  const turnText = roomStatus === "finished"
+    ? winner === 0 ? "本局和棋" : `${winner === 1 ? "黑棋" : "白棋"}连成五子`
+    : roomStatus === "waiting"
     ? "房间已准备，等待好友加入"
-    : winner
-      ? `${winner === 1 ? "黑棋" : "白棋"}连成五子`
-      : `轮到${turn === 1 ? "黑棋" : "白棋"}`;
+    : `轮到${turn === 1 ? "黑棋" : "白棋"}`;
 
   useEffect(() => {
     const invitation = new URL(window.location.href).searchParams.get("room")?.trim().toUpperCase() || "";
@@ -191,8 +204,26 @@ export default function Home() {
 
   useEffect(() => {
     if (!user || !roomId) return;
-    const timer = window.setInterval(() => void refreshRoom(roomId, false), 1400);
-    return () => window.clearInterval(timer);
+    const generation = roomGeneration.current;
+    const poll = async () => {
+      if (roomPollInFlight.current) return;
+      roomPollInFlight.current = true;
+      const controller = new AbortController();
+      roomPollController.current = controller;
+      try {
+        await refreshRoom(roomId, false, generation, controller.signal);
+      } finally {
+        if (roomPollController.current === controller) {
+          roomPollController.current = null;
+          roomPollInFlight.current = false;
+        }
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 1400);
+    return () => {
+      window.clearInterval(timer);
+      roomPollController.current?.abort();
+    };
   }, [user?.id, roomId]);
 
   async function hydrateProfile() {
@@ -221,8 +252,17 @@ export default function Home() {
     }
   }
 
+  function invalidateRoomRequests() {
+    roomGeneration.current += 1;
+    roomPollController.current?.abort();
+    roomPollController.current = null;
+    roomPollInFlight.current = false;
+  }
+
   function expireSession() {
     if (roomId) setJoinCode(roomId);
+    invalidateRoomRequests();
+    latestRoom.current = { id: "", revision: -1 };
     setUser(null);
     setHistory([]);
     setActiveRoom(null);
@@ -270,18 +310,37 @@ export default function Home() {
   async function logout() {
     if (busy) return;
     setBusy(true);
-    try { await fetch("/api/auth/session", { method: "DELETE" }); } catch {}
-    setUser(null);
-    setHistory([]);
-    setActiveRoom(null);
-    setRoomId("");
-    setPassword("");
-    setBusy(false);
-    setToast("已安全退出");
+    try {
+      await readResponse<{ ok: boolean }>(await fetch("/api/auth/session", { method: "DELETE" }));
+      invalidateRoomRequests();
+      latestRoom.current = { id: "", revision: -1 };
+      setUser(null);
+      setHistory([]);
+      setActiveRoom(null);
+      setRoomId("");
+      setPassword("");
+      setToast("已安全退出");
+    } catch (caught) {
+      setToast(caught instanceof Error ? `退出失败：${caught.message}` : "退出失败，请重试");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function applyRoom(room: RoomView) {
-    if (latestRoom.current.id === room.id && room.revision < latestRoom.current.revision) return false;
+  function applyRoom(room: RoomView, expectedGeneration = roomGeneration.current) {
+    const current = latestRoom.current;
+    if (!shouldApplyRoomResponse({
+      expectedGeneration,
+      currentGeneration: roomGeneration.current,
+      currentRoomId: current.id,
+      responseRoomId: room.id,
+      currentRevision: current.revision,
+      responseRevision: room.revision,
+    })) return false;
+    if (!current.id) {
+      roomGeneration.current += 1;
+      seenResult.current = -1;
+    }
     latestRoom.current = { id: room.id, revision: room.revision };
     setRoomId(room.id);
     setSide(room.side);
@@ -297,9 +356,12 @@ export default function Home() {
     setBlackPlayer(room.blackPlayer);
     setWhitePlayer(room.whitePlayer);
     setHint(null);
-    if (room.winner && seenResult.current !== room.revision) {
+    if (room.status === "finished" && seenResult.current !== room.revision) {
       seenResult.current = room.revision;
+      setResignOpen(false);
       setResultOpen(true);
+    } else if (room.status !== "finished") {
+      setResultOpen(false);
     }
     return true;
   }
@@ -311,11 +373,20 @@ export default function Home() {
     window.history.replaceState({}, "", url);
   }
 
-  async function refreshRoom(id: string, showError = true) {
+  async function refreshRoom(
+    id: string,
+    showError = true,
+    expectedGeneration = roomGeneration.current,
+    signal?: AbortSignal,
+  ) {
     try {
-      const data = await readResponse<RoomPayload>(await fetch(`/api/rooms?id=${encodeURIComponent(id)}`, { cache: "no-store" }));
-      return applyRoom(data.room);
+      const data = await readResponse<RoomPayload>(await fetch(`/api/rooms?id=${encodeURIComponent(id)}`, {
+        cache: "no-store",
+        signal,
+      }));
+      return applyRoom(data.room, expectedGeneration);
     } catch (caught) {
+      if (caught instanceof Error && caught.name === "AbortError") return false;
       if (caught instanceof ApiError && caught.status === 401) showFailure(caught, "房间连接失败");
       else if (showError) showFailure(caught, "房间连接失败");
       return false;
@@ -385,14 +456,16 @@ export default function Home() {
 
   async function onlineAction(action: "move" | "undo" | "resign" | "reset", index?: number) {
     if (busy || !roomId) return;
+    const expectedGeneration = roomGeneration.current;
+    const actionRoomId = roomId;
     setBusy(true);
     try {
       const data = await readResponse<RoomPayload>(await fetch("/api/rooms", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action, id: roomId, index }),
+        body: JSON.stringify({ action, id: actionRoomId, index }),
       }));
-      applyRoom(data.room);
+      applyRoom(data.room, expectedGeneration);
     } catch (caught) {
       showFailure(caught, "操作失败");
     } finally {
@@ -401,14 +474,15 @@ export default function Home() {
   }
 
   function place(index: number) {
-    if (busy || winner || board[index]) return;
+    if (busy || board[index]) return;
     if (roomStatus === "waiting") return setToast("先邀请好友加入房间");
+    if (roomStatus === "finished") return;
     if (turn !== side) return setToast("还没轮到你");
     void onlineAction("move", index);
   }
 
   function getHint() {
-    if (winner || turn !== side) return setToast("等轮到你再看提示");
+    if (roomStatus !== "active" || turn !== side) return setToast("等轮到你再看提示");
     const empty = board.flatMap((stone, index) => stone ? [] : [index]);
     const near = empty.filter((index) => !moves.length
       ? index === 112
@@ -421,7 +495,9 @@ export default function Home() {
   }
 
   async function exitGame() {
+    invalidateRoomRequests();
     latestRoom.current = { id: "", revision: -1 };
+    seenResult.current = -1;
     setRoomId("");
     setJoinCode("");
     setRoomUrl("");
@@ -583,7 +659,7 @@ export default function Home() {
         </aside>
 
         <section className="board-card">
-          <div className="turn-banner"><i className={`disc ${turn === 1 ? "black" : "white"}`} /><b>{turnText}</b><small>{roomStatus === "waiting" ? "分享邀请开始对局" : `第 ${moves.length + (winner ? 0 : 1)} 手`}</small></div>
+          <div className="turn-banner"><i className={`disc ${turn === 1 ? "black" : "white"}`} /><b>{turnText}</b><small>{roomStatus === "waiting" ? "分享邀请开始对局" : roomStatus === "finished" ? `共 ${moves.length} 手` : `第 ${moves.length + 1} 手`}</small></div>
           <div className="board-frame"><div className="board" role="grid" aria-label="十五乘十五五子棋棋盘">
             {board.map((stone, index) => {
               const row = Math.floor(index / BOARD_SIZE), col = index % BOARD_SIZE;
@@ -591,15 +667,16 @@ export default function Home() {
               return <button key={index} className={cls} role="gridcell" onClick={() => place(index)} aria-label={`${row + 1}行${col + 1}列${stone ? stone === 1 ? "黑棋" : "白棋" : "空位"}`}>{STARS.has(index) && !stone && <i className="star" />}{stone > 0 && <i className={`stone ${stone === 1 ? "stone-black" : "stone-white"}`} />}{hint === index && !stone && <i className="hint" />}</button>;
             })}
           </div></div>
-          <nav className="game-actions" aria-label="棋局操作"><button disabled={busy} onClick={() => void onlineAction("undo")}><span>↶</span>悔一步</button><button disabled={busy} onClick={getHint}><span>✦</span>提示</button><button onClick={() => setRulesOpen(true)}><span>?</span>规则</button><button disabled={busy} onClick={() => void onlineAction("resign")}><span>⚑</span>认输</button></nav>
+          <nav className="game-actions" aria-label="棋局操作"><button disabled={busy || roomStatus !== "active"} onClick={() => void onlineAction("undo")}><span>↶</span>悔一步</button><button disabled={busy || roomStatus !== "active"} onClick={getHint}><span>✦</span>提示</button><button onClick={() => setRulesOpen(true)}><span>?</span>规则</button>{roomStatus === "finished" ? <button disabled={busy} onClick={() => void onlineAction("reset")}><span>＋</span>再来一局</button> : <button disabled={busy || roomStatus !== "active"} onClick={() => setResignOpen(true)}><span>⚑</span>认输</button>}</nav>
           {roomStatus === "waiting" && <button className="primary-button waiting-share" onClick={() => setInviteOpen(true)}>复制邀请，让好友加入</button>}
         </section>
       </section>
 
       {toast && <div className="toast" role="status">{toast}</div>}
-      {inviteOpen && <div className="scrim"><section className="modal invite-modal" role="dialog" aria-modal="true"><button className="modal-close" onClick={() => setInviteOpen(false)}>×</button><span className="eyebrow">ROOM INVITATION</span><h2>邀请好友来对战</h2><p>微信或浏览器均可打开。对方需要先登录或注册，再输入房间信息。</p><div className="invite-details"><label>网址<code>{currentInvitation().url}</code></label><label>房间号<strong>{roomId}</strong></label>{roomHasPassword ? <label>房间密码<input type="text" value={invitePassword} onChange={(event) => setInvitePassword(event.target.value)} maxLength={16} placeholder="重新填写房间密码" /></label> : <label>房间密码<strong>无密码</strong></label>}</div><button className="primary-button" onClick={copyInvitation}>复制完整邀请</button><button className="text-button" onClick={systemShare}>调用系统分享</button><small>安全提示：密码只进入复制内容，不写入网址。</small></section></div>}
+      {inviteOpen && <div className="scrim"><section className="modal invite-modal" role="dialog" aria-modal="true"><button className="modal-close" onClick={() => setInviteOpen(false)}>×</button><span className="eyebrow">ROOM INVITATION</span><h2>邀请好友来对战</h2><p>微信或浏览器均可打开。对方需要先登录或注册，再输入房间信息。</p><div className="invite-details"><label>网址<code>{currentInvitation().url}</code></label><label>房间号<strong>{roomId}</strong></label>{roomHasPassword ? <label>房间密码<input type="text" value={invitePassword} onChange={(event) => setInvitePassword(event.target.value)} maxLength={16} placeholder="重新填写房间密码" /></label> : <label>房间密码<strong>无密码</strong></label>}</div><label className="manual-invitation">完整邀请（复制不可用时可长按全选）<textarea readOnly value={currentInvitation().text} onFocus={(event) => event.currentTarget.select()} /></label><button className="primary-button" onClick={copyInvitation}>复制完整邀请</button><button className="text-button" onClick={systemShare}>调用系统分享</button><small>安全提示：密码只进入复制内容，不写入网址。</small></section></div>}
       {rulesOpen && <div className="scrim"><section className="modal rules-modal" role="dialog" aria-modal="true"><button className="modal-close" onClick={() => setRulesOpen(false)}>×</button><span className="eyebrow">HOW TO PLAY</span><h2>五子棋规则</h2><ol><li><b>01</b><span>黑棋先手，双方轮流在交叉点落子。</span></li><li><b>02</b><span>横、竖或斜线率先连成五子获胜。</span></li><li><b>03</b><span>本游戏为好友休闲局，当前不设置禁手。</span></li></ol><button className="primary-button" onClick={() => setRulesOpen(false)}>知道了</button></section></div>}
-      {resultOpen && winner > 0 && <div className="scrim"><section className="modal result-modal" role="dialog" aria-modal="true"><span className="result-crown">♛</span><span className="eyebrow">GOOD GAME</span><h2>{winner === selfSide ? "你赢了" : `${opponentName}赢了`}</h2><p>棋局和战绩已经保存到服务器。</p><button className="primary-button" disabled={busy} onClick={() => { setResultOpen(false); void onlineAction("reset"); }}>再来一局</button><button className="text-button" onClick={() => setResultOpen(false)}>回看棋盘</button></section></div>}
+      {resignOpen && <div className="scrim"><section className="modal resign-modal" role="alertdialog" aria-modal="true"><span className="result-crown">⚑</span><span className="eyebrow">CONFIRM RESIGN</span><h2>确认认输？</h2><p>认输会立即结束本局，并在战绩中记录一次负场。</p><button className="danger-button" disabled={busy} onClick={() => { setResignOpen(false); void onlineAction("resign"); }}>确认认输</button><button className="text-button" disabled={busy} onClick={() => setResignOpen(false)}>继续下棋</button></section></div>}
+      {resultOpen && outcome && <div className="scrim"><section className="modal result-modal" role="dialog" aria-modal="true"><span className="result-crown">{outcome.isDraw ? "＝" : "♛"}</span><span className="eyebrow">GOOD GAME</span><h2>{outcome.title}</h2><p>{outcome.detail}</p><button className="primary-button" disabled={busy} onClick={() => { setResultOpen(false); void onlineAction("reset"); }}>再来一局</button><button className="text-button" onClick={() => setResultOpen(false)}>回看棋盘</button></section></div>}
     </main>
   );
 }

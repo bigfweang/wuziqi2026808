@@ -261,6 +261,38 @@ try {
   const afterResetProfile = await request("/api/me", {}, blackLogin.token);
   assert.equal(afterResetProfile.user.stats.wins, 1, "starting the next round must not alter prior scoring");
 
+  const drawPattern = Array.from({ length: 225 }, (_, index) => {
+    const row = Math.floor(index / 15);
+    const column = index % 15;
+    return (row + 2 * column + 3) % 4 < 2 ? 1 : 2;
+  });
+  assert.equal(drawPattern.at(-1), 1);
+  assert.equal(drawPattern.filter((stone) => stone === 1).length, 113);
+  assert.equal(drawPattern.filter((stone) => stone === 2).length, 112);
+  const drawBoard = [...drawPattern];
+  drawBoard[224] = 0;
+  const drawMoves = drawBoard.flatMap((stone, index) => stone ? [{ index, stone }] : []);
+  const drawDb = new DatabaseSync(join(dataDirectory, "gomoku.db"));
+  drawDb.prepare(`
+    UPDATE rooms
+    SET board = ?, moves = ?, turn = 1, status = 'active', winner = 0, revision = revision + 1
+    WHERE id = ?
+  `).run(drawBoard.join(""), JSON.stringify(drawMoves), created.room.id);
+  drawDb.close();
+
+  const drawFinished = await action(blackLogin.token, created.token, "move", 224);
+  assert.equal(drawFinished.room.status, "finished");
+  assert.equal(drawFinished.room.winner, 0);
+  assert.equal(drawFinished.room.moves.length, 225);
+  const blackAfterDraw = await request("/api/me", {}, blackLogin.token);
+  const whiteAfterDraw = await request("/api/me", {}, whiteLogin.token);
+  assert.deepEqual(blackAfterDraw.user.stats, { wins: 1, losses: 0, draws: 1, total: 2 });
+  assert.deepEqual(whiteAfterDraw.user.stats, { wins: 0, losses: 1, draws: 1, total: 2 });
+  assert.equal(blackAfterDraw.history[0].result, "draw");
+  const resetDraw = await action(whiteLogin.token, joined.token, "reset");
+  assert.equal(resetDraw.room.status, "active");
+  assert.equal(resetDraw.room.round, 3);
+
   const blackLoginAgain = await jsonRequest("/api/auth/session", "POST", {
     mode: "dev",
     deviceId: "profile-flow-black",
@@ -269,8 +301,9 @@ try {
   assert.equal(blackLoginAgain.user.id, blackLogin.user.id);
   assert.equal(blackLoginAgain.user.avatarId, blackLogin.user.avatarId);
   assert.equal(blackLoginAgain.user.stats.wins, 1);
+  assert.equal(blackLoginAgain.user.stats.draws, 1);
 
-  process.stdout.write("profile flow passed: stable user/avatar, presence, profiles, scoring, history, resume identity\n");
+  process.stdout.write("profile flow passed: stable user/avatar, presence, win/draw scoring, reset, history, resume identity\n");
 } finally {
   await stopServer();
 }
