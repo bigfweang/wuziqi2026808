@@ -2,7 +2,7 @@
 
 ## Goal
 
-Deploy the GitHub branch `feature/wechat-minigame-prototype` to the existing service behind `https://game.lmbostudio.cn`, preserving all current SQLite data and the existing Caddy TLS setup.
+Deploy the standalone web game from GitHub branch `feature/web-game` to the existing service behind `https://game.lmbostudio.cn`, preserving all current SQLite data and the existing Caddy TLS setup. The release must contain commit `7bf475d` or a later descendant; older web candidates do not contain the final state-machine fixes.
 
 ## Non-negotiable guardrails
 
@@ -24,11 +24,12 @@ Deploy the GitHub branch `feature/wechat-minigame-prototype` to the existing ser
 
 ## Candidate verification
 
-1. Fetch `origin/feature/wechat-minigame-prototype` and deploy its current remote HEAD from a clean release checkout.
+1. Fetch `origin/feature/web-game` and deploy its current remote HEAD from a clean release checkout. Verify `git merge-base --is-ancestor 7bf475d HEAD` succeeds before building.
 2. Confirm Node.js 24 when building outside Docker.
 3. Run:
    - `npm ci`
    - `npm run build`
+   - `npx -y node@24 scripts/web-auth-flow-test.mjs`
    - `npx -y node@24 --test minigame/test/*.test.js`
    - `npx -y node@24 scripts/gameserver-broker-test.mjs`
    - `npx -y node@24 scripts/smoke-test.mjs`
@@ -52,6 +53,8 @@ sudo env ALLOW_DEV_AUTH=0 docker compose up -d --build
 
 `ALLOW_DEV_AUTH` must be `0` in production. Browser users register with a local account and password; password hashes use asynchronous `scrypt`, and the browser session is an HttpOnly/Secure/SameSite=Lax cookie. Do not expose any WeChat AppSecret to the container.
 
+Production scope for this release is the standalone web game, including opening the HTTPS invitation inside WeChat. The legacy native Mini Game client still calls the disabled `mode=dev` path and therefore is not production-authenticated when `ALLOW_DEV_AUTH=0`; do not claim that native client as live until real WeChat login is implemented.
+
 Do not use `docker compose down -v`.
 
 ## Post-deployment checks
@@ -63,7 +66,7 @@ Do not use `docker compose down -v`.
 3. Verify the home page title is `像素五子棋｜独立在线对战` and shows the login/register entry when no cookie is present.
 4. Verify the health response is `{"ok":true,"service":"pixel-gomoku"}`.
 5. Verify unauthenticated `GET /api/me` and room creation return `401`, while `POST /api/auth/session` with `mode=dev` returns `403`.
-6. Through the HTTPS UI, verify: register → refresh remains logged in → create a password room → copy invitation → open the URL in another browser/WeChat → register or log in → enter password → join.
+6. Through the HTTPS UI, verify: register → refresh remains logged in → create a password room → copy invitation → open the URL in another browser/WeChat → register or log in → enter password → join. Also verify resign requires confirmation, dismissing a result still leaves a visible `再来一局` action, and a full-board draw can be reset.
 7. Verify existing rooms and matches are still present, `PRAGMA user_version` is `3`, and `PRAGMA integrity_check` is `ok`.
 8. Verify Caddy still serves a valid certificate and proxies to the intended local upstream.
 9. Report the deployed commit, deployment mechanism, data backup path, live health result, and rollback target. Never include account passwords or secret values in the report.
