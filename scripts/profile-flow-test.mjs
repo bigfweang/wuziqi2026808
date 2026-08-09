@@ -245,7 +245,7 @@ try {
   const foreignKeyErrors = roundDb.prepare("PRAGMA foreign_key_check").all();
   assert.equal(settledRound.round, 1);
   assert.equal(currentRound.round, 2);
-  assert.equal(schemaVersion.user_version, 5);
+  assert.equal(schemaVersion.user_version, 6);
   assert.ok(userColumns.includes("password_salt"));
   assert.ok(userColumns.includes("password_hash"));
   assert.ok(roomColumns.includes("black_undos_used"));

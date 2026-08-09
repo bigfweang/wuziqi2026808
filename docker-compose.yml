@@ -8,6 +8,7 @@ services:
     environment:
       DATA_DIR: /app/data
       ALLOW_DEV_AUTH: ${ALLOW_DEV_AUTH:-0}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     volumes:
       - gomoku-data:/app/data
     healthcheck:

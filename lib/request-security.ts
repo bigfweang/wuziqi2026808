@@ -1,7 +1,8 @@
 export type AuthTransport = "cookie" | "bearer";
 
 export function mutationOriginError(request: Request, transport?: AuthTransport) {
-  if (transport === "bearer" || /^Bearer\s+/i.test(request.headers.get("authorization") || "")) {
+  const hasBearerHeader = /^Bearer\s+/i.test(request.headers.get("authorization") || "");
+  if (transport === "bearer" || (transport === undefined && hasBearerHeader)) {
     return null;
   }
   const origin = request.headers.get("origin");

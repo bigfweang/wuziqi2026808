@@ -60,7 +60,7 @@ declare global {
   var pixelGomokuDb: DatabaseSync | undefined;
 }
 
-const SUPPORTED_DATABASE_VERSION = 5;
+const SUPPORTED_DATABASE_VERSION = 6;
 
 export function migrateDatabase(db: DatabaseSync) {
   const currentVersion = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
@@ -122,6 +122,19 @@ export function migrateDatabase(db: DatabaseSync) {
         expires_at TEXT NOT NULL,
         FOREIGN KEY(user_id) REFERENCES users(id)
       );
+      CREATE TABLE IF NOT EXISTS admin_sessions (
+        token TEXT PRIMARY KEY NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS admin_audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        action TEXT NOT NULL,
+        target_user_id TEXT NOT NULL,
+        detail TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(target_user_id) REFERENCES users(id)
+      );
       CREATE TABLE IF NOT EXISTS matches (
         id TEXT PRIMARY KEY NOT NULL,
         room_id TEXT NOT NULL,
@@ -143,6 +156,9 @@ export function migrateDatabase(db: DatabaseSync) {
         FOREIGN KEY(owner_user_id) REFERENCES users(id)
       );
       CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);
+      CREATE INDEX IF NOT EXISTS admin_sessions_expires_idx ON admin_sessions(expires_at);
+      CREATE INDEX IF NOT EXISTS admin_audit_created_idx ON admin_audit_log(created_at DESC);
+      CREATE INDEX IF NOT EXISTS admin_audit_target_idx ON admin_audit_log(target_user_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS matches_black_user_idx ON matches(black_user_id, ended_at DESC);
       CREATE INDEX IF NOT EXISTS matches_white_user_idx ON matches(white_user_id, ended_at DESC);
       CREATE INDEX IF NOT EXISTS rooms_black_user_idx ON rooms(black_user_id, updated_at DESC);

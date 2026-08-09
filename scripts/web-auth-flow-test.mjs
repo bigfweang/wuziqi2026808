@@ -492,7 +492,7 @@ try {
   const integrity = db.prepare("PRAGMA integrity_check").get();
   const foreignKeyErrors = db.prepare("PRAGMA foreign_key_check").all();
   const storedSessionTokens = db.prepare("SELECT token FROM sessions").all().map((row) => row.token);
-  assert.equal(schemaVersion.user_version, 5);
+  assert.equal(schemaVersion.user_version, 6);
   assert.ok(columns.includes("password_salt"));
   assert.ok(columns.includes("password_hash"));
   assert.ok(roomColumns.includes("black_undos_used"));

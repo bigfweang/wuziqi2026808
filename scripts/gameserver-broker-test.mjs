@@ -180,7 +180,7 @@ try {
   const roomColumns = db.prepare("PRAGMA table_info(rooms)").all().map((column) => column.name);
   const integrity = db.prepare("PRAGMA integrity_check").get();
   const foreignKeyErrors = db.prepare("PRAGMA foreign_key_check").all();
-  assert.equal(schemaVersion.user_version, 5);
+  assert.equal(schemaVersion.user_version, 6);
   assert.ok(roomColumns.includes("black_undos_used"));
   assert.ok(roomColumns.includes("white_undos_used"));
   assert.equal(integrity.integrity_check, "ok");
