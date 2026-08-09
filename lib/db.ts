@@ -93,6 +93,8 @@ function migrateDatabase(db: DatabaseSync) {
         provider_user_id TEXT NOT NULL,
         nickname TEXT NOT NULL,
         avatar_id INTEGER NOT NULL CHECK (avatar_id BETWEEN 1 AND 9),
+        password_salt TEXT,
+        password_hash TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         last_seen_at TEXT NOT NULL,
@@ -131,8 +133,13 @@ function migrateDatabase(db: DatabaseSync) {
       CREATE INDEX IF NOT EXISTS rooms_black_user_idx ON rooms(black_user_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS rooms_white_user_idx ON rooms(white_user_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS gameserver_rooms_expires_idx ON gameserver_rooms(expires_at);
-      PRAGMA user_version = 2;
     `);
+    const userColumns = new Set(
+      (db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>).map((column) => column.name),
+    );
+    if (!userColumns.has("password_salt")) db.exec("ALTER TABLE users ADD COLUMN password_salt TEXT");
+    if (!userColumns.has("password_hash")) db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT");
+    db.exec("PRAGMA user_version = 3");
     db.exec("COMMIT");
   } catch (caught) {
     db.exec("ROLLBACK");

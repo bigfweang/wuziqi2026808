@@ -1,6 +1,7 @@
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { getDb, type RoomRow } from "./db";
+import { createUserPassword, UserPasswordError, verifyUserPassword } from "./user-password";
 
 export type UserRow = {
   id: string;
@@ -8,6 +9,8 @@ export type UserRow = {
   provider_user_id: string;
   nickname: string;
   avatar_id: number;
+  password_salt: string | null;
+  password_hash: string | null;
   created_at: string;
   updated_at: string;
   last_seen_at: string;
@@ -33,11 +36,45 @@ type MatchRow = {
 
 const SESSION_DAYS = 180;
 const ONLINE_WINDOW_MS = 30_000;
+const SESSION_COOKIE_NAME = "pixel_gomoku_session";
+const LOCAL_ACCOUNT_PATTERN = /^[a-z0-9_]{3,24}$/;
+const DUMMY_PASSWORD_SALT = "pixel-gomoku-missing-account";
+const DUMMY_PASSWORD_HASH = Buffer.alloc(32).toString("base64url");
+
+export class UserAuthError extends Error {
+  constructor(message: string, public readonly status = 400) {
+    super(message);
+    this.name = "UserAuthError";
+  }
+}
 
 export function cleanNickname(value: unknown, fallback = "像素棋手") {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
   return trimmed ? Array.from(trimmed).slice(0, 16).join("") : fallback;
+}
+
+export function cleanLocalAccount(value: unknown) {
+  if (typeof value !== "string") throw new UserAuthError("请输入账号");
+  const account = value.normalize("NFKC").trim().toLowerCase();
+  if (!LOCAL_ACCOUNT_PATTERN.test(account)) {
+    throw new UserAuthError("账号需为 3–24 位小写字母、数字或下划线");
+  }
+  return account;
+}
+
+function cleanAvatarId(value: unknown) {
+  const avatarId = Number(value);
+  if (!Number.isInteger(avatarId) || avatarId < 1 || avatarId > 9) {
+    throw new UserAuthError("请选择有效头像");
+  }
+  return avatarId;
+}
+
+function dummyPassword(value: unknown) {
+  if (typeof value !== "string") return "invalid-password";
+  const length = Array.from(value).length;
+  return length >= 8 && length <= 64 ? value : "invalid-password";
 }
 
 function cleanDeviceId(value: unknown) {
@@ -49,6 +86,74 @@ function cleanDeviceId(value: unknown) {
 export function findUser(id: string | null | undefined) {
   if (!id) return undefined;
   return getDb().prepare("SELECT * FROM users WHERE id = ? LIMIT 1").get(id) as UserRow | undefined;
+}
+
+export async function registerLocalUser(input: {
+  account: unknown;
+  nickname: unknown;
+  password: unknown;
+  avatarId: unknown;
+}) {
+  const account = cleanLocalAccount(input.account);
+  const nickname = cleanNickname(input.nickname, account);
+  const avatarId = cleanAvatarId(input.avatarId);
+  let credentials: Awaited<ReturnType<typeof createUserPassword>>;
+  try {
+    credentials = await createUserPassword(input.password);
+  } catch (caught) {
+    if (caught instanceof UserPasswordError) throw new UserAuthError(caught.message);
+    throw caught;
+  }
+  const now = new Date().toISOString();
+  try {
+    return getDb().prepare(`
+      INSERT INTO users (
+        id, provider, provider_user_id, nickname, avatar_id,
+        password_salt, password_hash, created_at, updated_at, last_seen_at
+      ) VALUES (?, 'local', ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING *
+    `).get(
+      randomUUID(),
+      account,
+      nickname,
+      avatarId,
+      credentials.salt,
+      credentials.hash,
+      now,
+      now,
+      now,
+    ) as UserRow;
+  } catch (caught) {
+    if (caught instanceof Error && caught.message.includes("UNIQUE constraint failed")) {
+      throw new UserAuthError("这个账号已经被注册", 409);
+    }
+    throw caught;
+  }
+}
+
+export async function authenticateLocalUser(accountValue: unknown, passwordValue: unknown) {
+  let account: string;
+  try {
+    account = cleanLocalAccount(accountValue);
+  } catch {
+    await verifyUserPassword(dummyPassword(passwordValue), DUMMY_PASSWORD_SALT, DUMMY_PASSWORD_HASH);
+    return undefined;
+  }
+  const user = getDb().prepare(`
+    SELECT * FROM users
+    WHERE provider = 'local' AND provider_user_id = ?
+    LIMIT 1
+  `).get(account) as UserRow | undefined;
+  if (!user) {
+    await verifyUserPassword(dummyPassword(passwordValue), DUMMY_PASSWORD_SALT, DUMMY_PASSWORD_HASH);
+    return undefined;
+  }
+  if (!(await verifyUserPassword(passwordValue, user.password_salt, user.password_hash))) return undefined;
+  const now = new Date().toISOString();
+  return getDb().prepare(`
+    UPDATE users SET last_seen_at = ?, updated_at = ?
+    WHERE id = ? RETURNING *
+  `).get(now, now, user.id) as UserRow;
 }
 
 export function findOrCreateDevUser(deviceIdValue: unknown, nicknameValue: unknown) {
@@ -86,6 +191,7 @@ export function createSession(userId: string) {
   const now = new Date();
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(now.getTime() + SESSION_DAYS * 86_400_000).toISOString();
+  getDb().prepare("DELETE FROM sessions WHERE expires_at <= ?").run(now.toISOString());
   getDb().prepare(`
     INSERT INTO sessions (token, user_id, created_at, expires_at)
     VALUES (?, ?, ?, ?)
@@ -93,20 +199,47 @@ export function createSession(userId: string) {
   return { token, expiresAt };
 }
 
-export function authenticateRequest(request: Request) {
+export function sessionCookie(token: string, expiresAt: string) {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  return `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Expires=${new Date(expiresAt).toUTCString()}${secure}`;
+}
+
+export function clearSessionCookie() {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+}
+
+export function deleteSession(token: string) {
+  getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);
+}
+
+function requestToken(request: Request) {
   const authorization = request.headers.get("authorization") || "";
-  const match = /^Bearer\s+([A-Za-z0-9_-]{32,})$/.exec(authorization);
-  if (!match) return undefined;
+  const bearer = /^Bearer\s+([A-Za-z0-9_-]{32,})$/.exec(authorization)?.[1];
+  if (bearer) return bearer;
+  const cookie = request.headers.get("cookie") || "";
+  for (const part of cookie.split(";")) {
+    const [name, ...valueParts] = part.trim().split("=");
+    if (name !== SESSION_COOKIE_NAME) continue;
+    const value = valueParts.join("=");
+    return /^[A-Za-z0-9_-]{32,}$/.test(value) ? value : undefined;
+  }
+  return undefined;
+}
+
+export function authenticateRequest(request: Request) {
+  const token = requestToken(request);
+  if (!token) return undefined;
   const user = getDb().prepare(`
     SELECT users.* FROM sessions
     JOIN users ON users.id = sessions.user_id
     WHERE sessions.token = ? AND sessions.expires_at > ?
     LIMIT 1
-  `).get(match[1], new Date().toISOString()) as UserRow | undefined;
+  `).get(token, new Date().toISOString()) as UserRow | undefined;
   if (!user) return undefined;
   const now = new Date().toISOString();
   getDb().prepare("UPDATE users SET last_seen_at = ? WHERE id = ?").run(now, user.id);
-  return { token: match[1], user: { ...user, last_seen_at: now } };
+  return { token, user: { ...user, last_seen_at: now } };
 }
 
 export function statsFor(userId: string): UserStats {
@@ -129,6 +262,14 @@ export function publicUser(user: UserRow) {
     nickname: user.nickname,
     avatarId: user.avatar_id,
     stats: statsFor(user.id),
+  };
+}
+
+export function selfUser(user: UserRow) {
+  return {
+    ...publicUser(user),
+    account: user.provider === "local" ? user.provider_user_id : null,
+    online: isUserOnline(user),
   };
 }
 

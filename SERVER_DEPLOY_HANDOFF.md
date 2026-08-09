@@ -41,16 +41,16 @@ Deploy the GitHub branch `feature/wechat-minigame-prototype` to the existing ser
 The repository Dockerfile already copies `.next/standalone`, `.next/static`, and `public/`. Prefer the existing deployment mechanism. For Docker Compose, update in place with the existing volume:
 
 ```bash
-ALLOW_DEV_AUTH=1 docker compose up -d --build
+ALLOW_DEV_AUTH=0 docker compose up -d --build
 ```
 
-If Docker requires `sudo`, preserve the explicit test flag with `sudo env` (plain `sudo` may filter it):
+If Docker requires `sudo`, preserve the production authentication flag with `sudo env` (plain `sudo` may filter it):
 
 ```bash
-sudo env ALLOW_DEV_AUTH=1 docker compose up -d --build
+sudo env ALLOW_DEV_AUTH=0 docker compose up -d --build
 ```
 
-`ALLOW_DEV_AUTH=1` is a temporary test-only setting because formal `wx.login` is not implemented yet. It must remain explicit and must be disabled after formal WeChat login is connected. Do not expose any AppSecret to the container until the formal server-side login implementation exists.
+`ALLOW_DEV_AUTH` must be `0` in production. Browser users register with a local account and password; password hashes use asynchronous `scrypt`, and the browser session is an HttpOnly/Secure/SameSite=Lax cookie. Do not expose any WeChat AppSecret to the container.
 
 Do not use `docker compose down -v`.
 
@@ -60,11 +60,13 @@ Do not use `docker compose down -v`.
 2. Verify externally:
    - `https://game.lmbostudio.cn/`
    - `https://game.lmbostudio.cn/api/health`
-   - `https://game.lmbostudio.cn/minigame-preview/index.html`
-3. Verify the health response is `{"ok":true,"service":"pixel-gomoku"}`.
-4. Verify existing data is still present and a new development profile/room flow works.
-5. Verify Caddy still serves a valid certificate and proxies to the intended local upstream.
-6. Report the deployed commit, deployment mechanism, data backup path, live health result, and rollback target. Never include secret values in the report.
+3. Verify the home page title is `像素五子棋｜独立在线对战` and shows the login/register entry when no cookie is present.
+4. Verify the health response is `{"ok":true,"service":"pixel-gomoku"}`.
+5. Verify unauthenticated `GET /api/me` and room creation return `401`, while `POST /api/auth/session` with `mode=dev` returns `403`.
+6. Through the HTTPS UI, verify: register → refresh remains logged in → create a password room → copy invitation → open the URL in another browser/WeChat → register or log in → enter password → join.
+7. Verify existing rooms and matches are still present, `PRAGMA user_version` is `3`, and `PRAGMA integrity_check` is `ok`.
+8. Verify Caddy still serves a valid certificate and proxies to the intended local upstream.
+9. Report the deployed commit, deployment mechanism, data backup path, live health result, and rollback target. Never include account passwords or secret values in the report.
 
 ## Rollback
 

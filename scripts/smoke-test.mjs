@@ -12,15 +12,17 @@ let logs = "";
 
 const server = spawn(process.execPath, [".next/standalone/server.js"], {
   cwd: process.cwd(),
-  env: { ...process.env, HOSTNAME: "127.0.0.1", PORT: port, DATA_DIR: dataDirectory },
+  env: { ...process.env, HOSTNAME: "127.0.0.1", PORT: port, DATA_DIR: dataDirectory, ALLOW_DEV_AUTH: "1" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 
 server.stdout.on("data", (chunk) => { logs += chunk.toString(); });
 server.stderr.on("data", (chunk) => { logs += chunk.toString(); });
 
-async function request(path, init) {
-  const response = await fetch(`${origin}${path}`, init);
+async function request(path, init = {}, sessionToken = "") {
+  const headers = { ...(init.headers || {}) };
+  if (sessionToken) headers.authorization = `Bearer ${sessionToken}`;
+  const response = await fetch(`${origin}${path}`, { ...init, headers });
   const text = await response.text();
   let data;
   try {
@@ -68,38 +70,53 @@ try {
   assert.equal(page.status, 200);
   assert.match(await page.text(), /像素五子棋/);
 
+  const blackSession = await request("/api/auth/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "dev", deviceId: "smoke-black-device", nickname: "黑方" }),
+  });
+  const whiteSession = await request("/api/auth/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "dev", deviceId: "smoke-white-device", nickname: "白方" }),
+  });
+
   const created = await request("/api/rooms", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ action: "create", name: "黑方" }),
-  });
+  }, blackSession.token);
   assert.equal(created.room.status, "waiting");
 
   const joined = await request("/api/rooms", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ action: "join", id: created.room.id, name: "白方" }),
-  });
+  }, whiteSession.token);
   assert.equal(joined.room.status, "active");
 
-  const action = (token, actionName, index) => request("/api/rooms", {
+  const action = (sessionToken, roomToken, actionName, index) => request("/api/rooms", {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ action: actionName, id: created.room.id, token, index }),
-  });
+    body: JSON.stringify({ action: actionName, id: created.room.id, token: roomToken, index }),
+  }, sessionToken);
 
-  await action(created.token, "move", 112);
-  const afterWhiteMove = await action(joined.token, "move", 113);
+  await action(blackSession.token, created.token, "move", 112);
+  const afterWhiteMove = await action(whiteSession.token, joined.token, "move", 113);
   assert.equal(afterWhiteMove.room.moves.length, 2);
-  const afterUndo = await action(joined.token, "undo");
+  const afterUndo = await action(whiteSession.token, joined.token, "undo");
   assert.equal(afterUndo.room.moves.length, 1);
-  const afterResign = await action(joined.token, "resign");
+  const afterResign = await action(whiteSession.token, joined.token, "resign");
   assert.equal(afterResign.room.winner, 1);
-  const afterReset = await action(created.token, "reset");
+  const afterReset = await action(blackSession.token, created.token, "reset");
   assert.equal(afterReset.room.moves.length, 0);
   assert.equal(afterReset.room.status, "active");
 
-  const blackView = await request(`/api/rooms?id=${created.room.id}&token=${encodeURIComponent(created.token)}`);
+  const blackView = await request(
+    `/api/rooms?id=${created.room.id}&token=${encodeURIComponent(created.token)}`,
+    {},
+    blackSession.token,
+  );
   assert.equal(blackView.room.blackName, "黑方");
   assert.equal(blackView.room.whiteName, "白方");
   process.stdout.write("smoke test passed: page, create, join, moves, undo, resign, reset, persistence\n");

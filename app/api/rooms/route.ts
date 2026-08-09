@@ -40,6 +40,7 @@ function view(room: RoomRow, token: string, userId?: string) {
     winningLine,
     round: room.round,
     revision: room.revision,
+    hasPassword: Boolean(room.password_hash),
     blackName: room.black_name,
     whiteName: room.white_name,
     blackPlayer: playerView(room.black_user_id, room.black_name, 1),
@@ -61,7 +62,8 @@ export async function GET(request: Request) {
   const id = (url.searchParams.get("id") || "").toUpperCase();
   const token = url.searchParams.get("token") || "";
   const session = authenticateRequest(request);
-  if (!id || (!token && !session)) return error("缺少房间信息");
+  if (!session) return error("请先注册或登录", 401);
+  if (!id) return error("缺少房间信息");
   const room = findRoom(id);
   if (!room) return error("没有找到这个房间", 404);
   try {
@@ -81,6 +83,7 @@ export async function POST(request: Request) {
     return error("请求内容不是有效 JSON");
   }
   const session = authenticateRequest(request);
+  if (!session) return error("请先注册或登录", 401);
   if (payload.action === "create") {
     const requestLimit = consumeRequestLimit(request, session?.user.id, {
       scope: "room-create",
@@ -163,6 +166,7 @@ export async function PATCH(request: Request) {
     return error("请求内容不是有效 JSON");
   }
   const session = authenticateRequest(request);
+  if (!session) return error("请先注册或登录", 401);
   const id = (payload.id || "").trim().toUpperCase();
   const token = payload.token || "";
   try {

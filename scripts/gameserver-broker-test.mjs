@@ -179,7 +179,7 @@ try {
   const schemaVersion = db.prepare("PRAGMA user_version").get();
   const integrity = db.prepare("PRAGMA integrity_check").get();
   const foreignKeyErrors = db.prepare("PRAGMA foreign_key_check").all();
-  assert.equal(schemaVersion.user_version, 2);
+  assert.equal(schemaVersion.user_version, 3);
   assert.equal(integrity.integrity_check, "ok");
   assert.deepEqual(foreignKeyErrors, []);
   db.close();
@@ -188,8 +188,14 @@ try {
   assert.equal(expiredResolve.response.status, 410);
   assert.equal(JSON.stringify(expiredResolve.data).includes(accessInfo), false);
 
+  const floodUsers = await Promise.all(Array.from(
+    { length: 6 },
+    (_, index) => login(`gsm-broker-flood-${index}`, `限流测试${index}`),
+  ));
   const missingRoomId = created.room.id === "AAAAAA" ? "BBBBBB" : "AAAAAA";
-  for (let attempt = 0; attempt < 46; attempt += 1) {
+  let globalLimitReached = false;
+  let permittedFloodRequests = 0;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
     const rejected = await rawRequest("/api/rooms", {
       method: "POST",
       headers: {
@@ -197,18 +203,16 @@ try {
         "x-forwarded-for": `198.51.100.${attempt + 1}`,
       },
       body: JSON.stringify({ action: "join", id: missingRoomId }),
-    });
+    }, floodUsers[attempt % floodUsers.length].token);
+    if (rejected.response.status === 429) {
+      globalLimitReached = true;
+      break;
+    }
     assert.equal(rejected.response.status, 404);
+    permittedFloodRequests += 1;
   }
-  const globallyLimited = await rawRequest("/api/rooms", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-forwarded-for": "198.51.100.254",
-    },
-    body: JSON.stringify({ action: "join", id: missingRoomId }),
-  });
-  assert.equal(globallyLimited.response.status, 429);
+  assert.equal(globalLimitReached, true);
+  assert.ok(permittedFloodRequests > 0);
 
   process.stdout.write("GameServer broker passed: room password, rate limit, member-only resolve, expiry, migration\n");
 } finally {

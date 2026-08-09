@@ -15,7 +15,8 @@
     "test:minigame": "node --test minigame/test/*.test.js",
     "test:gameserver": "node scripts/gameserver-broker-test.mjs",
     "test:profile": "node scripts/profile-flow-test.mjs",
-    "test:smoke": "node scripts/smoke-test.mjs"
+    "test:smoke": "node scripts/smoke-test.mjs",
+    "test:web": "node scripts/web-auth-flow-test.mjs"
   },
   "dependencies": {
     "next": "16.3.0",
