@@ -61,10 +61,52 @@ assert.equal(shouldApplyRoomResponse({
   responseRevision: 11,
 }), true);
 
+const futureDirectory = mkdtempSync(join(tmpdir(), "pixel-gomoku-future-schema-"));
+const futureDatabasePath = join(futureDirectory, "gomoku.db");
+const futureDb = new DatabaseSync(futureDatabasePath);
+futureDb.exec("PRAGMA user_version = 99");
+futureDb.close();
+const futurePort = "3474";
+const futureOrigin = `http://127.0.0.1:${futurePort}`;
+let futureLogs = "";
+const futureServer = spawn(process.execPath, [".next/standalone/server.js"], {
+  cwd: process.cwd(),
+  env: {
+    ...process.env,
+    HOSTNAME: "127.0.0.1",
+    PORT: futurePort,
+    DATA_DIR: futureDirectory,
+    ALLOW_DEV_AUTH: "0",
+  },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+futureServer.stdout.on("data", (chunk) => { futureLogs += chunk.toString(); });
+futureServer.stderr.on("data", (chunk) => { futureLogs += chunk.toString(); });
+let futureHealth;
+for (let attempt = 0; attempt < 80; attempt += 1) {
+  try {
+    futureHealth = await fetch(`${futureOrigin}/api/health`);
+    break;
+  } catch {
+    await delay(150);
+  }
+}
+assert.equal(futureHealth?.status, 500, `future schema must fail closed\n${futureLogs}`);
+futureServer.kill("SIGTERM");
+await Promise.race([
+  new Promise((resolve) => futureServer.once("exit", resolve)),
+  delay(3000),
+]);
+const unchangedFutureDb = new DatabaseSync(futureDatabasePath);
+assert.equal(unchangedFutureDb.prepare("PRAGMA user_version").get().user_version, 99);
+unchangedFutureDb.close();
+rmSync(futureDirectory, { recursive: true, force: true });
+
 const port = "3473";
 const origin = `http://127.0.0.1:${port}`;
 const dataDirectory = mkdtempSync(join(tmpdir(), "pixel-gomoku-web-auth-"));
 const databasePath = join(dataDirectory, "gomoku.db");
+const legacySessionToken = "legacy-session-token-0123456789abcdef";
 let logs = "";
 
 const legacyDb = new DatabaseSync(databasePath);
@@ -100,6 +142,25 @@ legacyDb.exec(`
     last_seen_at TEXT NOT NULL,
     UNIQUE(provider, provider_user_id)
   );
+  CREATE TABLE sessions (
+    token TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
+  INSERT INTO users (
+    id, provider, provider_user_id, nickname, avatar_id,
+    created_at, updated_at, last_seen_at
+  ) VALUES (
+    'legacy-user', 'dev', 'legacy-device', '旧会话用户', 1,
+    '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'
+  );
+  INSERT INTO sessions (token, user_id, created_at, expires_at)
+  VALUES (
+    '${legacySessionToken}', 'legacy-user',
+    '2026-08-01T00:00:00.000Z', '2030-08-01T00:00:00.000Z'
+  );
   PRAGMA user_version = 2;
 `);
 legacyDb.close();
@@ -131,16 +192,17 @@ async function rawRequest(path, init = {}, cookie = "") {
 async function jsonRequest(path, method, payload, cookie = "") {
   return rawRequest(path, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", origin },
     body: JSON.stringify(payload),
   }, cookie);
 }
 
 function sessionCookie(response) {
   const value = response.headers.get("set-cookie") || "";
-  assert.match(value, /pixel_gomoku_session=[A-Za-z0-9_-]{32,}/);
+  assert.match(value, /__Host-pixel_session=[A-Za-z0-9_-]{32,}/);
   assert.match(value, /HttpOnly/i);
   assert.match(value, /SameSite=Lax/i);
+  assert.match(value, /Secure/i);
   return value.split(";", 1)[0];
 }
 
@@ -179,12 +241,84 @@ try {
 
   const anonymousProfile = await rawRequest("/api/me");
   assert.equal(anonymousProfile.response.status, 401);
+  assert.match(anonymousProfile.response.headers.get("cache-control") || "", /no-store/i);
+  assert.match(anonymousProfile.response.headers.get("content-security-policy") || "", /frame-ancestors 'none'/i);
+  assert.equal(anonymousProfile.response.headers.get("x-frame-options"), "DENY");
+
+  const legacyProfile = await rawRequest(
+    "/api/me",
+    {},
+    `__Host-pixel_session=${legacySessionToken}`,
+  );
+  assert.equal(legacyProfile.response.status, 200, "v2 plaintext sessions must survive as v4 hashes");
+  assert.equal(legacyProfile.data.user.nickname, "旧会话用户");
 
   const anonymousCreate = await jsonRequest("/api/rooms", "POST", {
     action: "create",
     password: "2468",
   });
   assert.equal(anonymousCreate.response.status, 401, "registered session must be required to create rooms");
+
+  const missingOriginRegistration = await rawRequest("/api/auth/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      mode: "register",
+      account: "missing_origin",
+      nickname: "缺少来源",
+      password: "correct-horse-0",
+      avatarId: 1,
+    }),
+  });
+  assert.equal(missingOriginRegistration.response.status, 403);
+
+  const crossSiteRegistration = await rawRequest("/api/auth/session", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://evil.example" },
+    body: JSON.stringify({
+      mode: "register",
+      account: "cross_site",
+      nickname: "跨站来源",
+      password: "correct-horse-0",
+      avatarId: 1,
+    }),
+  });
+  assert.equal(crossSiteRegistration.response.status, 403);
+
+  const forgedFetchSiteRegistration = await rawRequest("/api/auth/session", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin,
+      "sec-fetch-site": "cross-site",
+    },
+    body: JSON.stringify({
+      mode: "register",
+      account: "forged_fetch_site",
+      nickname: "伪造来源",
+      password: "correct-horse-0",
+      avatarId: 1,
+    }),
+  });
+  assert.equal(forgedFetchSiteRegistration.response.status, 403);
+
+  const proxiedRegistration = await rawRequest("/api/auth/session", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: "https://game.lmbostudio.cn",
+      "x-forwarded-host": "game.lmbostudio.cn",
+      "x-forwarded-proto": "https",
+    },
+    body: JSON.stringify({
+      mode: "register",
+      account: "proxy_origin",
+      nickname: "代理来源",
+      password: "correct-horse-0",
+      avatarId: 1,
+    }),
+  });
+  assert.equal(proxiedRegistration.response.status, 201, "trusted HTTPS proxy origin must be accepted");
 
   const weakRegistration = await jsonRequest("/api/auth/session", "POST", {
     mode: "register",
@@ -209,7 +343,9 @@ try {
   assert.equal(blackRegistration.data.user.online, true);
   assert.equal("token" in blackRegistration.data, false, "web session token must stay in HttpOnly cookie");
   assert.equal(JSON.stringify(blackRegistration.data).includes("correct-horse-1"), false);
+  assert.match(blackRegistration.response.headers.get("cache-control") || "", /no-store/i);
   const blackCookie = sessionCookie(blackRegistration.response);
+  const blackRawSessionToken = blackCookie.split("=", 2)[1];
 
   const duplicateRegistration = await jsonRequest("/api/auth/session", "POST", {
     mode: "register",
@@ -242,6 +378,17 @@ try {
   assert.equal(blackProfile.data.user.account, "black_player");
   assert.deepEqual(blackProfile.data.user.stats, { wins: 0, losses: 0, draws: 0, total: 0 });
 
+  const seenDb = new DatabaseSync(databasePath);
+  const seenBefore = seenDb.prepare("SELECT last_seen_at FROM users WHERE id = ?")
+    .get(blackRegistration.data.user.id).last_seen_at;
+  await delay(20);
+  const repeatedProfile = await rawRequest("/api/me", {}, blackLoginCookie);
+  assert.equal(repeatedProfile.response.status, 200);
+  const seenAfter = seenDb.prepare("SELECT last_seen_at FROM users WHERE id = ?")
+    .get(blackRegistration.data.user.id).last_seen_at;
+  assert.equal(seenAfter, seenBefore, "frequent room polling must not write last_seen_at every request");
+  seenDb.close();
+
   const presence = await jsonRequest("/api/presence", "POST", {}, blackLoginCookie);
   assert.equal(presence.response.status, 200);
   assert.equal(presence.data.online, true);
@@ -256,6 +403,13 @@ try {
   assert.equal(whiteRegistration.response.status, 201);
   const whiteCookie = sessionCookie(whiteRegistration.response);
 
+  const crossSiteRoomCreate = await rawRequest("/api/rooms", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://evil.example" },
+    body: JSON.stringify({ action: "create", password: "2468" }),
+  }, blackCookie);
+  assert.equal(crossSiteRoomCreate.response.status, 403);
+
   const created = await jsonRequest("/api/rooms", "POST", {
     action: "create",
     password: "2468",
@@ -264,6 +418,7 @@ try {
   assert.equal(created.data.room.blackPlayer.nickname, "黑方玩家");
   assert.equal(created.data.room.blackPlayer.avatarId, 3);
   assert.equal(JSON.stringify(created.data).includes("2468"), false);
+  assert.equal("token" in created.data, false, "Cookie clients must not receive seat tokens");
 
   const unauthenticatedJoin = await jsonRequest("/api/rooms", "POST", {
     action: "join",
@@ -290,6 +445,8 @@ try {
   const roomView = await rawRequest(`/api/rooms?id=${created.data.room.id}`, {}, blackCookie);
   assert.equal(roomView.response.status, 200);
   assert.equal(roomView.data.room.status, "active");
+  assert.equal("token" in roomView.data, false);
+  assert.match(roomView.response.headers.get("cache-control") || "", /no-store/i);
 
   const anonymousMove = await jsonRequest("/api/rooms", "PATCH", {
     action: "move",
@@ -307,7 +464,18 @@ try {
   assert.equal(blackMove.response.status, 200);
   assert.equal(blackMove.data.room.moves.length, 1);
 
-  const logout = await rawRequest("/api/auth/session", { method: "DELETE" }, blackLoginCookie);
+  const crossSiteLogout = await rawRequest("/api/auth/session", {
+    method: "DELETE",
+    headers: { origin: "https://evil.example" },
+  }, blackLoginCookie);
+  assert.equal(crossSiteLogout.response.status, 403);
+  const afterRejectedLogout = await rawRequest("/api/me", {}, blackLoginCookie);
+  assert.equal(afterRejectedLogout.response.status, 200);
+
+  const logout = await rawRequest("/api/auth/session", {
+    method: "DELETE",
+    headers: { origin },
+  }, blackLoginCookie);
   assert.equal(logout.response.status, 200);
   assert.match(logout.response.headers.get("set-cookie") || "", /Max-Age=0/i);
   const afterLogout = await rawRequest("/api/me", {}, blackLoginCookie);
@@ -322,13 +490,18 @@ try {
   `).get();
   const integrity = db.prepare("PRAGMA integrity_check").get();
   const foreignKeyErrors = db.prepare("PRAGMA foreign_key_check").all();
-  assert.equal(schemaVersion.user_version, 3);
+  const storedSessionTokens = db.prepare("SELECT token FROM sessions").all().map((row) => row.token);
+  assert.equal(schemaVersion.user_version, 4);
   assert.ok(columns.includes("password_salt"));
   assert.ok(columns.includes("password_hash"));
   assert.equal(account.provider, "local");
   assert.ok(account.password_salt);
   assert.ok(account.password_hash);
   assert.notEqual(account.password_hash, "correct-horse-1");
+  assert.ok(storedSessionTokens.length >= 2);
+  assert.ok(storedSessionTokens.every((token) => /^sha256:[A-Za-z0-9_-]{43}$/.test(token)));
+  assert.equal(storedSessionTokens.includes(legacySessionToken), false);
+  assert.equal(storedSessionTokens.includes(blackRawSessionToken), false);
   assert.equal(integrity.integrity_check, "ok");
   assert.deepEqual(foreignKeyErrors, []);
   db.close();

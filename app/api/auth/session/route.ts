@@ -1,9 +1,10 @@
 import { consumeRequestLimit, type RateLimitResult } from "../../../../lib/request-rate-limit";
+import { mutationOriginError } from "../../../../lib/request-security";
 import {
   activeRoomFor,
   authenticateLocalUser,
   authenticateRequest,
-  clearSessionCookie,
+  clearSessionCookies,
   createSession,
   deleteSession,
   findOrCreateDevUser,
@@ -45,13 +46,18 @@ export async function POST(request: Request) {
     return error("请求内容不是有效 JSON");
   }
 
+  if (payload.mode !== "dev") {
+    const originError = mutationOriginError(request);
+    if (originError) return originError;
+  }
+
   if (payload.mode === "register" || payload.mode === "login") {
     const isRegistration = payload.mode === "register";
     const requestLimit = consumeRequestLimit(request, rateIdentity(payload.account), {
       scope: isRegistration ? "auth-register" : "auth-login",
       userLimit: isRegistration ? 3 : 10,
       ipLimit: isRegistration ? 6 : 20,
-      globalLimit: isRegistration ? 20 : 50,
+      globalLimit: isRegistration ? 120 : 300,
     });
     if (!requestLimit.allowed) return rateLimitError(requestLimit);
 
@@ -102,9 +108,15 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   const session = authenticateRequest(request);
-  if (session) deleteSession(session.token);
+  if (session) {
+    const originError = mutationOriginError(request, session.transport);
+    if (originError) return originError;
+    deleteSession(session.token);
+  }
+  const headers = new Headers({ "Cache-Control": "no-store" });
+  for (const cookie of clearSessionCookies()) headers.append("Set-Cookie", cookie);
   return Response.json(
     { ok: true },
-    { headers: { "Set-Cookie": clearSessionCookie() } },
+    { headers },
   );
 }

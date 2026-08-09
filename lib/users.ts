@@ -1,6 +1,7 @@
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { getDb, type RoomRow } from "./db";
+import { hashSessionToken } from "./session-token";
 import { createUserPassword, UserPasswordError, verifyUserPassword } from "./user-password";
 
 export type UserRow = {
@@ -36,7 +37,11 @@ type MatchRow = {
 
 const SESSION_DAYS = 180;
 const ONLINE_WINDOW_MS = 30_000;
-const SESSION_COOKIE_NAME = "pixel_gomoku_session";
+const ONLINE_TOUCH_INTERVAL_MS = 15_000;
+const LEGACY_SESSION_COOKIE_NAME = "pixel_gomoku_session";
+const SESSION_COOKIE_NAME = process.env.NODE_ENV === "production"
+  ? "__Host-pixel_session"
+  : LEGACY_SESSION_COOKIE_NAME;
 const LOCAL_ACCOUNT_PATTERN = /^[a-z0-9_]{3,24}$/;
 const DUMMY_PASSWORD_SALT = "pixel-gomoku-missing-account";
 const DUMMY_PASSWORD_HASH = Buffer.alloc(32).toString("base64url");
@@ -195,7 +200,7 @@ export function createSession(userId: string) {
   getDb().prepare(`
     INSERT INTO sessions (token, user_id, created_at, expires_at)
     VALUES (?, ?, ?, ?)
-  `).run(token, userId, now.toISOString(), expiresAt);
+  `).run(hashSessionToken(token), userId, now.toISOString(), expiresAt);
   return { token, expiresAt };
 }
 
@@ -204,42 +209,50 @@ export function sessionCookie(token: string, expiresAt: string) {
   return `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Expires=${new Date(expiresAt).toUTCString()}${secure}`;
 }
 
-export function clearSessionCookie() {
+export function clearSessionCookies() {
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+  return Array.from(new Set([SESSION_COOKIE_NAME, LEGACY_SESSION_COOKIE_NAME])).map(
+    (name) => `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`,
+  );
 }
 
 export function deleteSession(token: string) {
-  getDb().prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  getDb().prepare("DELETE FROM sessions WHERE token = ?").run(hashSessionToken(token));
 }
 
 function requestToken(request: Request) {
   const authorization = request.headers.get("authorization") || "";
   const bearer = /^Bearer\s+([A-Za-z0-9_-]{32,})$/.exec(authorization)?.[1];
-  if (bearer) return bearer;
+  if (bearer) return { token: bearer, transport: "bearer" as const };
   const cookie = request.headers.get("cookie") || "";
   for (const part of cookie.split(";")) {
     const [name, ...valueParts] = part.trim().split("=");
-    if (name !== SESSION_COOKIE_NAME) continue;
+    if (name !== SESSION_COOKIE_NAME && name !== LEGACY_SESSION_COOKIE_NAME) continue;
     const value = valueParts.join("=");
-    return /^[A-Za-z0-9_-]{32,}$/.test(value) ? value : undefined;
+    return /^[A-Za-z0-9_-]{32,}$/.test(value)
+      ? { token: value, transport: "cookie" as const }
+      : undefined;
   }
   return undefined;
 }
 
 export function authenticateRequest(request: Request) {
-  const token = requestToken(request);
-  if (!token) return undefined;
+  const credential = requestToken(request);
+  if (!credential) return undefined;
   const user = getDb().prepare(`
     SELECT users.* FROM sessions
     JOIN users ON users.id = sessions.user_id
     WHERE sessions.token = ? AND sessions.expires_at > ?
     LIMIT 1
-  `).get(token, new Date().toISOString()) as UserRow | undefined;
+  `).get(hashSessionToken(credential.token), new Date().toISOString()) as UserRow | undefined;
   if (!user) return undefined;
-  const now = new Date().toISOString();
-  getDb().prepare("UPDATE users SET last_seen_at = ? WHERE id = ?").run(now, user.id);
-  return { token, user: { ...user, last_seen_at: now } };
+  const now = Date.now();
+  const seenAt = Date.parse(user.last_seen_at);
+  if (!Number.isFinite(seenAt) || now - seenAt >= ONLINE_TOUCH_INTERVAL_MS) {
+    user.last_seen_at = new Date(now).toISOString();
+    getDb().prepare("UPDATE users SET last_seen_at = ? WHERE id = ?").run(user.last_seen_at, user.id);
+  }
+  return { token: credential.token, transport: credential.transport, user };
 }
 
 export function statsFor(userId: string): UserStats {

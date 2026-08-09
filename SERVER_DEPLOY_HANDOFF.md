@@ -51,7 +51,9 @@ If Docker requires `sudo`, preserve the production authentication flag with `sud
 sudo env ALLOW_DEV_AUTH=0 docker compose up -d --build
 ```
 
-`ALLOW_DEV_AUTH` must be `0` in production. Browser users register with a local account and password; password hashes use asynchronous `scrypt`, and the browser session is an HttpOnly/Secure/SameSite=Lax cookie. Do not expose any WeChat AppSecret to the container.
+`ALLOW_DEV_AUTH` must be `0` in production. Browser users register with a local account and password; password hashes use asynchronous `scrypt`, and the browser session is an `__Host-` HttpOnly/Secure/SameSite=Lax cookie. Schema v4 stores only SHA-256 session-token digests and migrates existing plaintext session rows transactionally while preserving the raw client cookie/Bearer token. Do not expose any WeChat AppSecret to the container.
+
+The same-origin checks trust `X-Forwarded-Proto` and `X-Forwarded-Host` only because the container port is reachable through the loopback-bound Caddy ingress. Do not expose the application port publicly or place an untrusted proxy in front of it.
 
 Production scope for this release is the standalone web game, including opening the HTTPS invitation inside WeChat. The legacy native Mini Game client still calls the disabled `mode=dev` path and therefore is not production-authenticated when `ALLOW_DEV_AUTH=0`; do not claim that native client as live until real WeChat login is implemented.
 
@@ -67,10 +69,11 @@ Do not use `docker compose down -v`.
 4. Verify the health response is `{"ok":true,"service":"pixel-gomoku"}`.
 5. Verify unauthenticated `GET /api/me` and room creation return `401`, while `POST /api/auth/session` with `mode=dev` returns `403`.
 6. Through the HTTPS UI, verify: register → refresh remains logged in → create a password room → copy invitation → open the URL in another browser/WeChat → register or log in → enter password → join. Also verify resign requires confirmation, dismissing a result still leaves a visible `再来一局` action, and a full-board draw can be reset.
-7. Verify existing rooms and matches are still present, `PRAGMA user_version` is `3`, and `PRAGMA integrity_check` is `ok`.
-8. Verify Caddy still serves a valid certificate and proxies to the intended local upstream.
-9. Report the deployed commit, deployment mechanism, data backup path, live health result, and rollback target. Never include account passwords or secret values in the report.
+7. Verify existing rooms and matches are still present, `PRAGMA user_version` is `4`, `PRAGMA integrity_check` is `ok`, and `SELECT COUNT(*) FROM sessions WHERE token NOT LIKE 'sha256:%'` returns `0`.
+8. Verify API responses include `Cache-Control: no-store`; the page includes CSP, `X-Frame-Options: DENY`, and `X-Content-Type-Options: nosniff`.
+9. Verify Caddy still serves a valid certificate and proxies to the intended local upstream. A real HTTPS registration/login is required to prove the forwarded host/protocol headers satisfy the same-origin check.
+10. Report the deployed commit, deployment mechanism, data backup path, live health result, and rollback target. Never include account passwords or secret values in the report.
 
 ## Rollback
 
-If health, profile flow, room persistence, or Caddy routing fails, restore the previous release/image while keeping the same data volume. Re-run external health and home-page checks after rollback.
+Schema v4 hashes all existing session tokens. Do not start the old v3 application against a v4 database: the old application cannot authenticate those rows and would write the schema version backward. During the controlled deployment window, rollback means restoring both the previous release/image and the verified pre-deployment SQLite backup. Re-run integrity, external health, and home-page checks after rollback. Once new production data has been accepted, prefer a forward fix instead of restoring an old database and losing new matches/accounts.

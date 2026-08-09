@@ -2,6 +2,7 @@ import { findRoom, insertRoom, updateRoom, type RoomRow } from "../../../lib/db"
 import { EMPTY_BOARD, findWinningLine, parseBoard, type Move } from "../../../lib/gomoku";
 import { createRoomPassword, RoomPasswordError, verifyRoomPassword } from "../../../lib/room-password";
 import { consumeRequestLimit, type RateLimitResult } from "../../../lib/request-rate-limit";
+import { mutationOriginError } from "../../../lib/request-security";
 import { applyRoomCommand, resolveRoomSide, RoomCommandError } from "../../../lib/room-service";
 import { authenticateRequest, playerView } from "../../../lib/users";
 
@@ -48,6 +49,10 @@ function view(room: RoomRow, token: string, userId?: string) {
   };
 }
 
+function roomResponse(transport: "cookie" | "bearer", room: ReturnType<typeof view>, token: string) {
+  return transport === "bearer" ? { token, room } : { room };
+}
+
 const error = (message: string, status = 400) => Response.json({ error: message }, { status });
 
 function rateLimitError(result: RateLimitResult) {
@@ -60,9 +65,9 @@ function rateLimitError(result: RateLimitResult) {
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const id = (url.searchParams.get("id") || "").toUpperCase();
-  const token = url.searchParams.get("token") || "";
   const session = authenticateRequest(request);
   if (!session) return error("请先注册或登录", 401);
+  const token = session.transport === "bearer" ? url.searchParams.get("token") || "" : "";
   if (!id) return error("缺少房间信息");
   const room = findRoom(id);
   if (!room) return error("没有找到这个房间", 404);
@@ -84,12 +89,14 @@ export async function POST(request: Request) {
   }
   const session = authenticateRequest(request);
   if (!session) return error("请先注册或登录", 401);
+  const originError = mutationOriginError(request, session.transport);
+  if (originError) return originError;
   if (payload.action === "create") {
     const requestLimit = consumeRequestLimit(request, session?.user.id, {
       scope: "room-create",
       userLimit: 10,
       ipLimit: 20,
-      globalLimit: 30,
+      globalLimit: 120,
     });
     if (!requestLimit.allowed) return rateLimitError(requestLimit);
     let roomPassword: Awaited<ReturnType<typeof createRoomPassword>>;
@@ -112,7 +119,10 @@ export async function POST(request: Request) {
           roomPassword.salt,
           roomPassword.hash,
         );
-        return Response.json({ token, room: view(room, token, session?.user.id) }, { status: 201 });
+        return Response.json(
+          roomResponse(session.transport, view(room, token, session.user.id), token),
+          { status: 201 },
+        );
       } catch (caught) {
         if (attempt === 4) throw caught;
       }
@@ -127,15 +137,23 @@ export async function POST(request: Request) {
         scope: "room-join",
         userLimit: 12,
         ipLimit: 30,
-        globalLimit: 60,
+        globalLimit: 240,
       });
       if (!requestLimit.allowed) return rateLimitError(requestLimit);
       const current = findRoom(id);
       if (!current) return error("没有找到这个房间", 404);
-      const existingSide = sideFor(current, payload.token || null, session?.user.id);
+      const existingSide = sideFor(
+        current,
+        session.transport === "bearer" ? payload.token || null : null,
+        session.user.id,
+      );
       if (existingSide) {
         const existingToken = tokenFor(current, existingSide);
-        return Response.json({ token: existingToken, room: view(current, existingToken || "", session?.user.id) });
+        return Response.json(roomResponse(
+          session.transport,
+          view(current, existingToken || "", session.user.id),
+          existingToken || "",
+        ));
       }
       if (!(await verifyRoomPassword(payload.password, current.password_salt, current.password_hash))) {
         return error("房间密码不正确", 403);
@@ -148,7 +166,9 @@ export async function POST(request: Request) {
         whiteUserId: session?.user.id || null,
         status: "active",
       });
-      return updated ? Response.json({ token, room: view(updated, token, session?.user.id) }) : error("朋友刚刚抢先加入了", 409);
+      return updated
+        ? Response.json(roomResponse(session.transport, view(updated, token, session.user.id), token))
+        : error("朋友刚刚抢先加入了", 409);
     } catch (caught) {
       if (caught instanceof RoomCommandError) return error(caught.message, caught.status);
       throw caught;
@@ -167,8 +187,10 @@ export async function PATCH(request: Request) {
   }
   const session = authenticateRequest(request);
   if (!session) return error("请先注册或登录", 401);
+  const originError = mutationOriginError(request, session.transport);
+  if (originError) return originError;
   const id = (payload.id || "").trim().toUpperCase();
-  const token = payload.token || "";
+  const token = session.transport === "bearer" ? payload.token || "" : "";
   try {
     const result = applyRoomCommand({
       id,

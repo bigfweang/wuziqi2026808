@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { hashSessionToken, isHashedSessionToken } from "./session-token";
 
 export type RoomRow = {
   id: string;
@@ -53,7 +54,13 @@ declare global {
   var pixelGomokuDb: DatabaseSync | undefined;
 }
 
-function migrateDatabase(db: DatabaseSync) {
+const SUPPORTED_DATABASE_VERSION = 4;
+
+export function migrateDatabase(db: DatabaseSync) {
+  const currentVersion = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+  if (currentVersion > SUPPORTED_DATABASE_VERSION) {
+    throw new Error(`Database schema ${currentVersion} is newer than this server supports (${SUPPORTED_DATABASE_VERSION})`);
+  }
   db.exec("BEGIN IMMEDIATE");
   try {
     db.exec(`
@@ -139,7 +146,16 @@ function migrateDatabase(db: DatabaseSync) {
     );
     if (!userColumns.has("password_salt")) db.exec("ALTER TABLE users ADD COLUMN password_salt TEXT");
     if (!userColumns.has("password_hash")) db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT");
-    db.exec("PRAGMA user_version = 3");
+    const sessionRows = db.prepare("SELECT token FROM sessions").all() as Array<{ token: string }>;
+    const updateSessionToken = db.prepare("UPDATE OR IGNORE sessions SET token = ? WHERE token = ?");
+    const deleteSessionToken = db.prepare("DELETE FROM sessions WHERE token = ?");
+    for (const row of sessionRows) {
+      if (isHashedSessionToken(row.token)) continue;
+      const digest = hashSessionToken(row.token);
+      const result = updateSessionToken.run(digest, row.token);
+      if (result.changes === 0) deleteSessionToken.run(row.token);
+    }
+    db.exec(`PRAGMA user_version = ${SUPPORTED_DATABASE_VERSION}`);
     db.exec("COMMIT");
   } catch (caught) {
     db.exec("ROLLBACK");

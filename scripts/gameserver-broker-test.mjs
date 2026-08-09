@@ -179,7 +179,7 @@ try {
   const schemaVersion = db.prepare("PRAGMA user_version").get();
   const integrity = db.prepare("PRAGMA integrity_check").get();
   const foreignKeyErrors = db.prepare("PRAGMA foreign_key_check").all();
-  assert.equal(schemaVersion.user_version, 3);
+  assert.equal(schemaVersion.user_version, 4);
   assert.equal(integrity.integrity_check, "ok");
   assert.deepEqual(foreignKeyErrors, []);
   db.close();
@@ -189,13 +189,13 @@ try {
   assert.equal(JSON.stringify(expiredResolve.data).includes(accessInfo), false);
 
   const floodUsers = await Promise.all(Array.from(
-    { length: 6 },
+    { length: 24 },
     (_, index) => login(`gsm-broker-flood-${index}`, `限流测试${index}`),
   ));
   const missingRoomId = created.room.id === "AAAAAA" ? "BBBBBB" : "AAAAAA";
   let globalLimitReached = false;
   let permittedFloodRequests = 0;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < 260; attempt += 1) {
     const rejected = await rawRequest("/api/rooms", {
       method: "POST",
       headers: {

@@ -1,4 +1,5 @@
 import { findRoom, getDb } from "../../../../lib/db";
+import { mutationOriginError } from "../../../../lib/request-security";
 import { authenticateRequest } from "../../../../lib/users";
 
 export const runtime = "nodejs";
@@ -60,6 +61,8 @@ export async function GET(request: Request) {
 export async function PUT(request: Request) {
   const session = authenticateRequest(request);
   if (!session) return error("请先登录", 401);
+  const originError = mutationOriginError(request, session.transport);
+  if (originError) return originError;
   let payload: { roomId?: string; accessInfo?: string; ttlSeconds?: number };
   try {
     payload = await request.json() as typeof payload;
